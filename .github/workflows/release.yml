@@ -1,0 +1,185 @@
+name: Release
+
+# Tag-driven release. Push a version tag (e.g. v1.0.6) and this workflow builds
+# the binaries, packages them as the archives the Homebrew formula expects, and
+# publishes a GitHub Release. The tag is the source of truth: Cargo.toml's
+# version is synced to the tag at build time, so no version-bump commit is
+# needed. Pull requests run the build only (validation), without publishing.
+#
+# Produces, per release:
+#   - awsctl-x86_64-unknown-linux-gnu.tar.xz (+ .sha256)
+#   - awsctl-aarch64-apple-darwin.tar.xz     (+ .sha256)
+# The .sha256 sidecars are consumed by the optional update-tap job below, which
+# renders the Homebrew formula and pushes it to a tap repository. That job is
+# skipped unless a tap is configured; see its comment for the settings it needs.
+
+on:
+  pull_request:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-apple-darwin
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Sync Cargo.toml version to tag
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i.bak -E "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          cargo update --workspace --quiet
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage archive
+        id: stage
+        shell: bash
+        run: |
+          NAME="awsctl-${{ matrix.target }}"
+          mkdir "$NAME"
+          cp "target/${{ matrix.target }}/release/awsctl" "$NAME/"
+          tar cJf "$NAME.tar.xz" "$NAME"
+          shasum -a 256 "$NAME.tar.xz" > "$NAME.tar.xz.sha256"
+          echo "archive=$NAME.tar.xz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ steps.stage.outputs.archive }}
+            ${{ steps.stage.outputs.archive }}.sha256
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Mark as prerelease when the tag has a -alpha/-beta/-rc/-prerelease
+        # suffix; otherwise publish as a regular release. --generate-notes
+        # synthesises the body from commits since the previous tag.
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "$GITHUB_REF_NAME" =~ -(alpha|beta|rc|prerelease) ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            $PRERELEASE_FLAG \
+            artifacts/*
+
+  update-tap:
+    name: Update Homebrew formula
+    needs: [build, release]
+    # Optional. Runs only if the repository defines a HOMEBREW_TAP_REPO
+    # variable naming a tap repo under the same owner (e.g. "homebrew-tap"),
+    # and installs a GitHub App with contents:write on that tap, exposing its
+    # id as the APP_ID variable and its private key as the PRIVATE_KEY secret.
+    # Without those the release is still published; only the tap update is
+    # skipped.
+    if: ${{ startsWith(github.ref, 'refs/tags/') && vars.HOMEBREW_TAP_REPO != '' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Mint a short-lived token scoped to just the tap repo (no user PAT).
+      - name: Mint tap token
+        id: tap-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.HOMEBREW_TAP_REPO }}
+
+      # Renders packaging/homebrew/awsctl.rb (repo, version and both SHA256s,
+      # read from the .sha256 sidecars built above) and pushes it to the tap.
+      - name: Render and push formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+          TAP_REPO: ${{ github.repository_owner }}/${{ vars.HOMEBREW_TAP_REPO }}
+          SOURCE_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          MAC_SHA=$(awk '{print $1}' dist/awsctl-aarch64-apple-darwin.tar.xz.sha256)
+          LINUX_SHA=$(awk '{print $1}' dist/awsctl-x86_64-unknown-linux-gnu.tar.xz.sha256)
+          if [ -z "$MAC_SHA" ] || [ -z "$LINUX_SHA" ]; then
+            echo "Could not resolve SHA256s for ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+
+          mkdir -p tap/Formula
+          sed -e "s|REPO_PLACEHOLDER|${SOURCE_REPO}|g" \
+              -e "s/VERSION_PLACEHOLDER/${VERSION}/" \
+              -e "s/MAC_ARM64_SHA256_PLACEHOLDER/${MAC_SHA}/" \
+              -e "s/LINUX_X86_64_SHA256_PLACEHOLDER/${LINUX_SHA}/" \
+              packaging/homebrew/awsctl.rb > tap/Formula/awsctl.rb
+
+          cd tap
+          git add Formula/awsctl.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date for ${VERSION}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "awsctl ${VERSION}"
+          git push

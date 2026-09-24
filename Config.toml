@@ -1,0 +1,16 @@
+# Template config for awsctl. Copy it, set the two values under [defaults] to
+# your own AWS IAM Identity Center (SSO) portal, then apply it with:
+#
+#     awsctl config --update <path-to-this-file>
+
+# The permission sets awsctl offers when you pick a role.
+roles = ["AdministratorAccess"]
+
+# The regions awsctl offers when you pick a region.
+regions = ["us-east-1", "eu-west-2"]
+
+[defaults]
+# Your AWS access portal URL, from the IAM Identity Center console.
+sso_start_url = "https://your-sso-portal.awsapps.com/start"
+# The region your Identity Center instance lives in.
+sso_region = "us-east-1"
