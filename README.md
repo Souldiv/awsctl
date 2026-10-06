@@ -102,5 +102,4 @@ See [DEVELOPER.md](./DEVELOPER.md) for the build and release process.
 
 ## License
 
-None yet. Until a license is added, the usual default applies: the code is
-copyright its authors and carries no grant of use.
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).
