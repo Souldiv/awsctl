@@ -64,11 +64,11 @@ pub enum Commands {
         account: Option<String>,
 
         /// role name to use (skips interactive selection)
-        #[arg(short, long, requires = "sso")]
+        #[arg(short = 'o', long, requires = "sso")]
         role: Option<String>,
 
         /// sso region to use (skips interactive selection)
-        #[arg(long, requires = "sso")]
+        #[arg(short = 'r', long, requires = "sso")]
         region: Option<String>,
     },
     /// Display account related information
