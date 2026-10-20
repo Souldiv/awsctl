@@ -139,7 +139,7 @@ jobs:
       # Mint a short-lived token scoped to just the tap repo (no user PAT).
       - name: Mint tap token
         id: tap-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.APP_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
