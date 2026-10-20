@@ -66,6 +66,10 @@ pub enum Commands {
         /// role name to use (skips interactive selection)
         #[arg(short, long, requires = "sso")]
         role: Option<String>,
+
+        /// sso region to use (skips interactive selection)
+        #[arg(long, requires = "sso")]
+        region: Option<String>,
     },
     /// Display account related information
     #[group(required = true, multiple = false)]
