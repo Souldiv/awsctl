@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use ini::Ini;
 use inquire::{Select, Text};
 use std::fs::File;
@@ -30,14 +30,34 @@ pub fn prompt_for_profile(
     ))
 }
 
-pub fn prompt_for_defaults(list_of_regions: Vec<String>) -> Result<SsoDefaults> {
+pub fn prompt_for_defaults(
+    list_of_regions: Vec<String>,
+    region: Option<String>,
+) -> Result<SsoDefaults> {
+    let region = region
+        .map(|region| validate_region(region, &list_of_regions))
+        .transpose()?;
     let start_url = Text::new("Enter SSO Start Url: ")
         .prompt()
         .with_context(|| "There was an error reading sso start url.")?;
-    let region = Select::new("Select SSO Region: ", list_of_regions)
-        .prompt()
-        .with_context(|| "There was an error displaying regions. Please try again.")?;
+    let region = match region {
+        Some(region) => region,
+        None => Select::new("Select SSO Region: ", list_of_regions)
+            .prompt()
+            .with_context(|| "There was an error displaying regions. Please try again.")?,
+    };
     Ok(SsoDefaults::new(start_url, region))
+}
+
+fn validate_region(region: String, list_of_regions: &[String]) -> Result<String> {
+    if list_of_regions.iter().any(|known| known == &region) {
+        return Ok(region);
+    }
+    Err(anyhow!(
+        "Unknown region '{}'. Valid regions are: {}",
+        region,
+        list_of_regions.join(", ")
+    ))
 }
 
 pub fn create_cfg_from_file(file_path: &str) -> Result<()> {
@@ -106,4 +126,27 @@ pub fn update_credentials_file(
     credentials.write_to_file(aws_credentials_file_path)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_region;
+
+    fn regions() -> Vec<String> {
+        vec![String::from("us-east-1"), String::from("eu-west-1")]
+    }
+
+    #[test]
+    fn accepts_a_known_region() {
+        let region = validate_region(String::from("eu-west-1"), &regions()).unwrap();
+        assert_eq!(region, "eu-west-1");
+    }
+
+    #[test]
+    fn rejects_an_unknown_region_and_names_the_valid_ones() {
+        let error = validate_region(String::from("mars-north-1"), &regions()).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("mars-north-1"));
+        assert!(message.contains("us-east-1, eu-west-1"));
+    }
 }

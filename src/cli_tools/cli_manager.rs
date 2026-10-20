@@ -22,6 +22,12 @@ use crate::cli_tools::helper;
 use crate::config::constants::APP_NAME;
 use crate::config::{AccessToken, AccountConfig, Credentials};
 
+pub struct SsoSelections {
+    pub account: Option<String>,
+    pub role: Option<String>,
+    pub region: Option<String>,
+}
+
 pub struct CliManager {
     cfg: AccountConfig,
     access_token: AccessToken,
@@ -68,12 +74,13 @@ impl CliManager {
         setup_profile: bool,
         force: bool,
         keep_alive: bool,
-        account: Option<String>,
-        role: Option<String>,
+        selections: SsoSelections,
     ) -> Result<()> {
         if !self.cfg.is_defaults_set() {
-            self.cfg
-                .set_defaults(helper::prompt_for_defaults(self.cfg.get_list_of_regions())?)?;
+            self.cfg.set_defaults(helper::prompt_for_defaults(
+                self.cfg.get_list_of_regions(),
+                selections.region,
+            )?)?;
         }
         let sso_defaults = self.cfg.get_sso_defaults().unwrap();
 
@@ -103,8 +110,8 @@ impl CliManager {
                     &self.access_token,
                     &acc_info_provider,
                     &mut self.cfg,
-                    account,
-                    role,
+                    selections.account,
+                    selections.role,
                 )
                 .await?;
             }
