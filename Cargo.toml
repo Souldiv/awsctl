@@ -3,6 +3,7 @@ name = "awsctl"
 version = "1.0.5"
 edition = "2021"
 repository = "https://github.com/Souldiv/awsctl"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
