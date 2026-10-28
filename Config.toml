@@ -14,3 +14,25 @@ regions = ["us-east-1", "eu-west-2"]
 sso_start_url = "https://your-sso-portal.awsapps.com/start"
 # The region your Identity Center instance lives in.
 sso_region = "us-east-1"
+
+# The name each account gets in ~/.aws/config, so you can type a short one:
+#
+#     AWS_PROFILE=dev aws s3 ls
+#     aws s3 ls --profile dev
+#
+# Write the account name on the left and the name you want on the right. The
+# account id works on the left too, and survives the account being renamed.
+#
+# awsctl fills this in for you: every account it finds when you run
+# `awsctl sso --setup-profile` is added here with a name derived from the
+# account name. Shorten the ones you use and leave the rest. awsctl never
+# overwrites a name you have set.
+#
+# Without an entry, an account gets its name lowercased, with anything that
+# would need quoting replaced by '-'. Two accounts that want one name do not
+# fight over it: the first keeps the name, the second gets the account id
+# appended, and awsctl says so.
+[profile_names]
+# "labflow-dev-customer" = "dev"
+# "labflow-saas-au" = "au"
+# "123456789012" = "prod"

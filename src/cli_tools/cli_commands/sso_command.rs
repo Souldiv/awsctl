@@ -4,7 +4,9 @@ use tokio::time::{sleep, Duration};
 use crate::aws::sso::SsoAccessTokenProvider;
 use crate::aws::AccountInfoProvider;
 use crate::cli_tools::helper;
+use crate::cli_tools::profile_plan::{self, ProfilePlan};
 use crate::config::constants::APP_NAME;
+use crate::config::profile_name::resolve_profile_names;
 use crate::config::{AccessToken, AccountConfig, Credentials, Profile};
 
 // used for requesting access token from aws
@@ -38,13 +40,29 @@ pub async fn setup_profile(
         return Err(anyhow!("Please authenticate client and try again."));
     }
 
+    let sso_defaults = account_config
+        .get_sso_defaults()
+        .cloned()
+        .ok_or_else(|| anyhow!("Please set your sso defaults and try again."))?;
+
     let mut list_of_acc = account_info_provider
         .get_account_list(&access_token)
         .await?;
 
     list_of_acc.sort_by(|a, b| a.account_name.cmp(&b.account_name));
 
-    let profile = if let Some(account_filter) = account {
+    let discovered = resolve_profile_names(
+        list_of_acc.iter().map(|account_info| {
+            (
+                account_info.account_name.as_str(),
+                account_info.account_id.as_str(),
+            )
+        }),
+        account_config.get_profile_names(),
+    );
+    account_config.seed_profile_names(&discovered);
+
+    let profiles = if let Some(account_filter) = account {
         let account_info = list_of_acc
             .into_iter()
             .find(|a| {
@@ -77,32 +95,32 @@ pub async fn setup_profile(
             account_info.account_name, account_info.account_id, role_name, region
         );
 
-        Profile::new(
+        vec![Profile::new(
             account_info.account_name,
             account_info.account_id,
             role_name,
             region,
-        )
+        )]
     } else {
-        helper::prompt_for_profile(
+        helper::prompt_for_profiles(
             account_config.get_list_of_regions(),
             account_config.get_list_of_roles(),
             list_of_acc,
         )?
     };
-    let _ = account_config.set_profile(profile)?;
+
+    let plan = profile_plan::plan_profiles(&profiles, account_config.get_profile_names())?;
+    report_name_clashes(&plan);
+
+    let _ = account_config.set_profile(plan.default_profile.clone())?;
+
+    helper::update_aws_config_file(&sso_defaults, &plan.sso_profiles)?;
 
     let creds: Credentials = account_info_provider
         .get_role_credentials(
             &access_token,
-            account_config
-                .get_current_profile()
-                .unwrap()
-                .get_account_id(),
-            account_config
-                .get_current_profile()
-                .unwrap()
-                .get_role_name(),
+            plan.default_profile.get_account_id(),
+            plan.default_profile.get_role_name(),
         )
         .await?
         .into();
@@ -119,6 +137,16 @@ pub async fn setup_profile(
     println!("Profile was setup successfully");
 
     Ok(())
+}
+
+fn report_name_clashes(plan: &ProfilePlan) {
+    for clash in &plan.name_clashes {
+        println!(
+            "Warning: profile name '{}' was already taken, so '{}' was written as '{}'. \
+             Give each account its own name under [profile_names] in your awsctl config.",
+            clash.wanted_name, clash.account_name, clash.profile_name
+        );
+    }
 }
 
 // starts a keep alive function that re-news the role credentials every hour

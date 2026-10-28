@@ -1,33 +1,73 @@
 use anyhow::{anyhow, Context, Result};
 use ini::Ini;
-use inquire::{Select, Text};
+use inquire::validator::MinLengthValidator;
+use inquire::{MultiSelect, Select, Text};
 use std::fs::File;
 use std::path::PathBuf;
 
 use crate::aws::AccountInfo;
+use crate::config::aws_config_file;
 use crate::config::constants::APP_NAME;
-use crate::config::{AccountConfig, Profile, SsoDefaults};
+use crate::config::{AccountConfig, Profile, SsoDefaults, SsoProfile, SSO_SESSION_NAME};
 
-pub fn prompt_for_profile(
+/// Prompts for one or more accounts, then for the region and role they share.
+///
+/// The returned profiles lead with the account that takes the `[default]`
+/// credentials.
+pub fn prompt_for_profiles(
     list_of_regions: Vec<String>,
     list_of_roles: Vec<String>,
     list_of_account_info: Vec<AccountInfo>,
-) -> Result<Profile> {
-    let account_info = Select::new("Select Profile Account: ", list_of_account_info)
-        .prompt()
-        .with_context(|| "There was an error displaying account info. Please try again.")?;
+) -> Result<Vec<Profile>> {
+    let accounts = prompt_for_accounts(list_of_account_info)?;
     let region = Select::new("Select Profile Region: ", list_of_regions)
         .prompt()
         .with_context(|| "There was an error displaying regions. Please try again.")?;
     let role_name = Select::new("Select Profile Role: ", list_of_roles)
         .prompt()
         .with_context(|| "There was an error displaying roles. Please try again.")?;
-    Ok(Profile::new(
-        account_info.account_name,
-        account_info.account_id,
-        role_name,
-        region,
-    ))
+
+    Ok(accounts
+        .into_iter()
+        .map(|account_info| {
+            Profile::new(
+                account_info.account_name,
+                account_info.account_id,
+                role_name.clone(),
+                region.clone(),
+            )
+        })
+        .collect())
+}
+
+fn prompt_for_accounts(list_of_account_info: Vec<AccountInfo>) -> Result<Vec<AccountInfo>> {
+    let accounts = MultiSelect::new("Select Profile Accounts: ", list_of_account_info)
+        .with_validator(MinLengthValidator::new(1).with_message("Select at least one account."))
+        .prompt()
+        .with_context(|| "There was an error displaying account info. Please try again.")?;
+
+    default_account_first(accounts)
+}
+
+// inquire reports ticked options in list order rather than the order they were
+// ticked, so the account that takes [default] is asked for instead of guessed.
+fn default_account_first(accounts: Vec<AccountInfo>) -> Result<Vec<AccountInfo>> {
+    if accounts.len() < 2 {
+        return Ok(accounts);
+    }
+
+    let account_names: Vec<String> = accounts.iter().map(AccountInfo::to_string).collect();
+    let chosen = Select::new("Select the account to keep as [default]: ", account_names)
+        .raw_prompt()
+        .with_context(|| {
+            "There was an error displaying the selected accounts. Please try again."
+        })?;
+
+    let mut ordered = accounts;
+    let default_account = ordered.remove(chosen.index);
+    ordered.insert(0, default_account);
+
+    Ok(ordered)
 }
 
 pub fn prompt_for_defaults(
@@ -124,6 +164,19 @@ pub fn update_credentials_file(
     );
 
     credentials.write_to_file(aws_credentials_file_path)?;
+
+    Ok(())
+}
+
+pub fn update_aws_config_file(sso_defaults: &SsoDefaults, profiles: &[SsoProfile]) -> Result<()> {
+    let config_path = aws_config_file::aws_config_path()?;
+    aws_config_file::write_sso_profiles(&config_path, SSO_SESSION_NAME, sso_defaults, profiles)?;
+
+    println!(
+        "Wrote {} profile(s) to {}",
+        profiles.len(),
+        config_path.display()
+    );
 
     Ok(())
 }

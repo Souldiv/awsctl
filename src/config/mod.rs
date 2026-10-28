@@ -1,13 +1,16 @@
 pub mod access_token;
 pub mod account_config;
+pub mod aws_config_file;
 pub mod constants;
 pub mod credentials;
 pub mod device_client;
 pub mod profile;
+pub mod profile_name;
 pub mod sso_defaults;
 
 pub use access_token::AccessToken;
 pub use account_config::AccountConfig;
+pub use aws_config_file::{SsoProfile, SSO_SESSION_NAME};
 pub use credentials::Credentials;
 pub use device_client::DeviceClient;
 pub use profile::Profile;
