@@ -279,9 +279,7 @@ impl CliManager {
                 let document_content: String = std::fs::read_to_string(&document_path)?;
                 let document_name = match document_name {
                     Some(name) => name,
-                    None => {
-                        document_path.split("/").last().unwrap().to_string()
-                    }
+                    None => document_path.split("/").last().unwrap().to_string(),
                 };
                 let _ = ssm_provider
                     .create_ssm_document(&document_name, &document_content)

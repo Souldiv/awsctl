@@ -220,9 +220,7 @@ impl SnapshotProvider {
                 eks_volume_snapshot_content_id: None,
                 cnpg_backup_id: Some(backup.metadata.name.clone().unwrap_or_default()),
                 namespace: backup.metadata.namespace.clone().unwrap_or_default(),
-                created_at: jiff_to_chrono(
-                    backup.metadata.creation_timestamp.clone().unwrap().0,
-                ),
+                created_at: jiff_to_chrono(backup.metadata.creation_timestamp.clone().unwrap().0),
             })
             .collect();
 
