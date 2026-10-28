@@ -54,22 +54,61 @@ the values, and load it:
 awsctl config --update ./Config.toml
 ```
 
-The same file lists the roles and regions `awsctl` offers when you choose one.
-`awsctl config --show` prints the current config, `awsctl config --location`
-prints its path, and `awsctl config edit` opens it in `$EDITOR`.
+The same file lists the roles and regions `awsctl` offers when you choose one,
+and the short profile names described under [Naming your
+profiles](#naming-your-profiles). `awsctl config --show` prints the current
+config, `awsctl config --location` prints its path, and `awsctl config edit`
+opens it in `$EDITOR`.
 
 ## Use
 
-Sign in and choose an account and role:
+Sign in and choose the accounts and role you want:
 
 ```bash
 awsctl sso --get-access-token   # authenticate in the browser
-awsctl sso --setup-profile      # pick an account and role, write the AWS profile
+awsctl sso --setup-profile      # pick accounts and a role, write the AWS profiles
 awsctl sso --keep-alive         # refresh the session in the background
 ```
 
 Pass `--account` and `--role` to skip the interactive pick, and `--force` to
 discard a cached token.
+
+`--setup-profile` lets you tick more than one account. Each one gets a profile
+in `~/.aws/config`, so you reach the others without signing in again:
+
+```bash
+aws s3 ls --profile au
+AWS_PROFILE=au aws eks list-clusters
+```
+
+Those profiles share one `[sso-session awsctl]` block, which the AWS CLI and the
+SDKs use to mint and refresh role credentials on their own. After the session
+itself expires, `aws sso login --sso-session awsctl` renews every profile at
+once.
+
+The account you pick for `[default]` also has its credentials written to
+`~/.aws/credentials`, as before, so commands you run without a profile still act
+on that account. The `awsctl` subcommands below read those credentials rather
+than a profile, so they follow the account you picked for `[default]`.
+
+### Naming your profiles
+
+A profile name is what you type, so `awsctl` keeps it short. It lists every
+account it finds under `[profile_names]` in your config:
+
+```toml
+[profile_names]
+"labflow-dev-customer" = "dev"
+"labflow-saas-au" = "au"
+```
+
+Edit the right-hand side to whatever you want to type. The left-hand side takes
+an account id as well, which outlives a rename of the account.
+
+An account you have not named gets its account name lowercased, with anything
+that would need quoting replaced by `-`. When two accounts want one name, the
+first keeps it and the second gets its account id appended; `awsctl` prints
+which account that was.
 
 The remaining commands act on the profile you selected:
 

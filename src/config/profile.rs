@@ -23,6 +23,10 @@ impl Profile {
         }
     }
 
+    pub fn get_account_name(&self) -> &str {
+        &self.sso_account_name
+    }
+
     pub fn get_account_id(&self) -> &str {
         &self.sso_account_id
     }
@@ -34,5 +38,4 @@ impl Profile {
     pub fn get_region(&self) -> &str {
         &self.region
     }
-
 }

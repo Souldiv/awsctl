@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
                     version_name.clone(),
                     *list_inventory,
                     *create_document,
-                    document_path.clone()
+                    document_path.clone(),
                 )
                 .await?;
         }
