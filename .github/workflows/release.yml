@@ -4,7 +4,8 @@ name: Release
 # the binaries, packages them as the archives the Homebrew formula expects, and
 # publishes a GitHub Release. The tag is the source of truth: Cargo.toml's
 # version is synced to the tag at build time, so no version-bump commit is
-# needed. Pull requests run the build only (validation), without publishing.
+# needed. Pull requests are validated by ci.yml instead; this workflow runs on
+# a tag, or on demand via workflow_dispatch to rehearse a release build.
 #
 # Produces, per release:
 #   - awsctl-x86_64-unknown-linux-gnu.tar.xz (+ .sha256)
@@ -14,7 +15,7 @@ name: Release
 # skipped unless a tap is configured; see its comment for the settings it needs.
 
 on:
-  pull_request:
+  workflow_dispatch:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
