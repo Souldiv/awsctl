@@ -59,6 +59,25 @@ pub enum Commands {
         #[arg(short, long, default_value_t = false, group = "sso")]
         keep_alive: bool,
 
+        /// point [default] at a profile written by --setup-profile (prompts when no name is given)
+        #[arg(
+            short = 'd',
+            long,
+            group = "sso",
+            value_name = "PROFILE",
+            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive", "list_profiles"]
+        )]
+        switch_default: Option<Option<String>>,
+
+        /// list the profiles written by --setup-profile, marking the one behind [default]
+        #[arg(
+            short = 'l',
+            long,
+            group = "sso",
+            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive"]
+        )]
+        list_profiles: bool,
+
         /// account name or account id to authenticate directly (skips interactive selection)
         #[arg(short, long, requires = "sso")]
         account: Option<String>,

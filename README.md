@@ -91,6 +91,13 @@ The account you pick for `[default]` also has its credentials written to
 on that account. The `awsctl` subcommands below read those credentials rather
 than a profile, so they follow the account you picked for `[default]`.
 
+To move `[default]` to another of those profiles later, run
+`awsctl sso --switch-default au`, or leave the name off to pick from a list. It
+reuses the cached access token, so there is no browser round trip, and it
+rewrites only `[default]` in `~/.aws/credentials`. `awsctl sso --list-profiles`
+prints the profiles `awsctl` has written, with a `*` on the one `[default]`
+currently holds.
+
 ### Naming your profiles
 
 A profile name is what you type, so `awsctl` keeps it short. It lists every
