@@ -71,7 +71,9 @@ awsctl sso --keep-alive         # refresh the session in the background
 ```
 
 Pass `--account` and `--role` to skip the interactive pick, and `--force` to
-discard a cached token.
+discard a cached token. `--get-access-token` also hands the new token to the
+AWS CLI's cache, so every profile `awsctl` wrote works again without re-running
+`--setup-profile`.
 
 `--setup-profile` lets you tick more than one account. Each one gets a profile
 in `~/.aws/config`, so you reach the others without signing in again:

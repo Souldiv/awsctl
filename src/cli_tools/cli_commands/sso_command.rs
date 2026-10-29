@@ -10,24 +10,29 @@ use crate::config::aws_config_file;
 use crate::config::constants::APP_NAME;
 use crate::config::profile_name::resolve_profile_names;
 use crate::config::{
-    AccessToken, AccountConfig, Credentials, Profile, SsoProfile, SSO_SESSION_NAME,
+    AccessToken, AccountConfig, Credentials, Profile, SsoDefaults, SsoProfile, SSO_SESSION_NAME,
 };
 
 // used for requesting access token from aws
 pub async fn get_access_token(
     access_token: AccessToken,
-    start_url: String,
-    sso_region: String,
+    sso_defaults: &SsoDefaults,
     force: bool,
 ) -> Result<()> {
     let token = (access_token.is_set() && !force).then(|| access_token);
-    let access_token = SsoAccessTokenProvider::new(start_url.clone(), sso_region, &token)?
-        .get_access_token()
-        .await?;
+    let access_token = SsoAccessTokenProvider::new(
+        sso_defaults.get_start_url().to_string(),
+        sso_defaults.get_sso_region().to_string(),
+        &token,
+    )?
+    .get_access_token()
+    .await?;
 
-    confy::store(APP_NAME, "access-token", access_token)
+    confy::store(APP_NAME, "access-token", &access_token)
         .with_context(|| "Unable to store access token.")?;
     println!("Access token was generated.");
+
+    helper::update_sso_token_cache(&access_token, sso_defaults)?;
 
     Ok(())
 }

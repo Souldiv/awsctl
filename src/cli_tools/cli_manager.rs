@@ -116,13 +116,7 @@ impl CliManager {
             }
             // get access token
             (true, false, ..) => {
-                sso_command::get_access_token(
-                    self.access_token,
-                    sso_defaults.get_start_url().to_string(),
-                    sso_defaults.get_sso_region().to_string(),
-                    flags.force,
-                )
-                .await?;
+                sso_command::get_access_token(self.access_token, sso_defaults, flags.force).await?;
             }
             // setup profile
             (_, true, false, _) => {
