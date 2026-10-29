@@ -115,6 +115,7 @@ pub async fn setup_profile(
     let _ = account_config.set_profile(plan.default_profile.clone())?;
 
     helper::update_aws_config_file(&sso_defaults, &plan.sso_profiles)?;
+    helper::update_sso_token_cache(access_token, &sso_defaults)?;
 
     let creds: Credentials = account_info_provider
         .get_role_credentials(

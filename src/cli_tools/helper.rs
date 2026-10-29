@@ -8,7 +8,10 @@ use std::path::PathBuf;
 use crate::aws::AccountInfo;
 use crate::config::aws_config_file;
 use crate::config::constants::APP_NAME;
-use crate::config::{AccountConfig, Profile, SsoDefaults, SsoProfile, SSO_SESSION_NAME};
+use crate::config::sso_token_cache;
+use crate::config::{
+    AccessToken, AccountConfig, Profile, SsoDefaults, SsoProfile, SSO_SESSION_NAME,
+};
 
 /// Prompts for one or more accounts, then for the region and role they share.
 ///
@@ -164,6 +167,26 @@ pub fn update_credentials_file(
     );
 
     credentials.write_to_file(aws_credentials_file_path)?;
+
+    Ok(())
+}
+
+pub fn update_sso_token_cache(
+    access_token: &AccessToken,
+    sso_defaults: &SsoDefaults,
+) -> Result<()> {
+    let cache_path = sso_token_cache::cache_path(SSO_SESSION_NAME)?;
+    sso_token_cache::write_sso_token(&cache_path, access_token, sso_defaults)?;
+
+    println!(
+        "Wrote the SSO token for session '{}' to {}",
+        SSO_SESSION_NAME,
+        cache_path.display()
+    );
+
+    if let Some(warning) = sso_token_cache::renewal_warning(access_token) {
+        println!("{}", warning);
+    }
 
     Ok(())
 }
