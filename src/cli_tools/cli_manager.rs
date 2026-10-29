@@ -28,6 +28,15 @@ pub struct SsoSelections {
     pub region: Option<String>,
 }
 
+pub struct SsoFlags {
+    pub get_access_token: bool,
+    pub setup_profile: bool,
+    pub force: bool,
+    pub keep_alive: bool,
+    pub switch_default: Option<Option<String>>,
+    pub list_profiles: bool,
+}
+
 pub struct CliManager {
     cfg: AccountConfig,
     access_token: AccessToken,
@@ -68,14 +77,11 @@ impl CliManager {
         Ok(config)
     }
 
-    pub async fn sso_command(
-        mut self,
-        get_access_token: bool,
-        setup_profile: bool,
-        force: bool,
-        keep_alive: bool,
-        selections: SsoSelections,
-    ) -> Result<()> {
+    pub async fn sso_command(mut self, flags: SsoFlags, selections: SsoSelections) -> Result<()> {
+        if flags.list_profiles {
+            return sso_command::list_profiles(&self.cfg);
+        }
+
         if !self.cfg.is_defaults_set() {
             self.cfg.set_defaults(helper::prompt_for_defaults(
                 self.cfg.get_list_of_regions(),
@@ -93,19 +99,27 @@ impl CliManager {
 
         let acc_info_provider = AccountInfoProvider::new(&config);
 
-        match (get_access_token, setup_profile, keep_alive) {
-            // get access token
-            (true, false, ..) => {
-                sso_command::get_access_token(
-                    self.access_token,
-                    sso_defaults.get_start_url().to_string(),
-                    sso_defaults.get_sso_region().to_string(),
-                    force,
+        match (
+            flags.get_access_token,
+            flags.setup_profile,
+            flags.keep_alive,
+            flags.switch_default,
+        ) {
+            (false, false, false, Some(profile_name)) => {
+                sso_command::switch_default(
+                    &self.access_token,
+                    &acc_info_provider,
+                    &mut self.cfg,
+                    profile_name,
                 )
                 .await?;
             }
+            // get access token
+            (true, false, ..) => {
+                sso_command::get_access_token(self.access_token, sso_defaults, flags.force).await?;
+            }
             // setup profile
-            (.., true, false) => {
+            (_, true, false, _) => {
                 sso_command::setup_profile(
                     &self.access_token,
                     &acc_info_provider,
@@ -116,7 +130,7 @@ impl CliManager {
                 .await?;
             }
             // start keep alive
-            (.., false, true) => loop {
+            (_, false, true, _) => loop {
                 sso_command::start_keep_alive(&self.access_token, &acc_info_provider, &self.cfg)
                     .await?;
             },

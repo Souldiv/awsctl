@@ -71,7 +71,9 @@ awsctl sso --keep-alive         # refresh the session in the background
 ```
 
 Pass `--account` and `--role` to skip the interactive pick, and `--force` to
-discard a cached token.
+discard a cached token. `--get-access-token` also hands the new token to the
+AWS CLI's cache, so every profile `awsctl` wrote works again without re-running
+`--setup-profile`.
 
 `--setup-profile` lets you tick more than one account. Each one gets a profile
 in `~/.aws/config`, so you reach the others without signing in again:
@@ -90,6 +92,13 @@ The account you pick for `[default]` also has its credentials written to
 `~/.aws/credentials`, as before, so commands you run without a profile still act
 on that account. The `awsctl` subcommands below read those credentials rather
 than a profile, so they follow the account you picked for `[default]`.
+
+To move `[default]` to another of those profiles later, run
+`awsctl sso --switch-default au`, or leave the name off to pick from a list. It
+reuses the cached access token, so there is no browser round trip, and it
+rewrites only `[default]` in `~/.aws/credentials`. `awsctl sso --list-profiles`
+prints the profiles `awsctl` has written, with a `*` on the one `[default]`
+currently holds.
 
 ### Naming your profiles
 

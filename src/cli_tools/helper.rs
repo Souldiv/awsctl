@@ -1,14 +1,12 @@
 use anyhow::{anyhow, Context, Result};
-use ini::Ini;
 use inquire::validator::MinLengthValidator;
 use inquire::{MultiSelect, Select, Text};
-use std::fs::File;
 use std::path::PathBuf;
 
 use crate::aws::AccountInfo;
-use crate::config::aws_config_file;
 use crate::config::constants::APP_NAME;
 use crate::config::sso_token_cache;
+use crate::config::{aws_config_file, aws_credentials_file};
 use crate::config::{
     AccessToken, AccountConfig, Profile, SsoDefaults, SsoProfile, SSO_SESSION_NAME,
 };
@@ -138,37 +136,28 @@ pub fn update_credentials_file(
     secret_access_key: &str,
     session_token: &str,
 ) -> Result<()> {
-    let home_dir = directories::UserDirs::new()
-        .context("Unable to get home directory")?
-        .home_dir()
-        .join(".aws");
+    let credentials_path = aws_credentials_file::aws_credentials_path()?;
+    aws_credentials_file::write_default_credentials(
+        &credentials_path,
+        access_key_id,
+        secret_access_key,
+        session_token,
+    )
+}
 
-    let aws_credentials_file_path = home_dir.join("credentials").to_path_buf();
-    if !aws_credentials_file_path.try_exists()? {
-        File::create(&aws_credentials_file_path)?;
-    }
+pub fn prompt_for_written_profile(profiles: Vec<SsoProfile>) -> Result<SsoProfile> {
+    let names: Vec<String> = profiles
+        .iter()
+        .map(|profile| profile.profile_name.clone())
+        .collect();
+    let chosen = Select::new("Select the profile to make [default]: ", names)
+        .raw_prompt()
+        .with_context(|| "There was an error displaying the profiles. Please try again.")?;
 
-    let mut credentials = Ini::load_from_file(&aws_credentials_file_path)?;
-
-    credentials.set_to(
-        Some(String::from("default")),
-        String::from("aws_access_key_id"),
-        String::from(access_key_id),
-    );
-    credentials.set_to(
-        Some(String::from("default")),
-        String::from("aws_secret_access_key"),
-        String::from(secret_access_key),
-    );
-    credentials.set_to(
-        Some(String::from("default")),
-        String::from("aws_session_token"),
-        String::from(session_token),
-    );
-
-    credentials.write_to_file(aws_credentials_file_path)?;
-
-    Ok(())
+    profiles
+        .into_iter()
+        .nth(chosen.index)
+        .ok_or_else(|| anyhow!("The selected profile is out of range. Please try again."))
 }
 
 pub fn update_sso_token_cache(

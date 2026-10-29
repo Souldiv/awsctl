@@ -30,8 +30,9 @@ pub fn aws_config_path() -> Result<PathBuf> {
 
 /// Writes the SSO session and one profile per account into an AWS config file.
 ///
-/// Sections and keys awsctl does not own are left as they are; the blocks it
-/// does own are replaced, so repeated runs do not stack up stale keys.
+/// Only the keys awsctl owns are set; sections and keys it does not own,
+/// including extra keys inside its own blocks, are left as they are. The file
+/// is written only when a value changed.
 pub fn write_sso_profiles(
     config_path: &Path,
     session_name: &str,
@@ -41,22 +42,32 @@ pub fn write_sso_profiles(
     let mut config = load_or_create(config_path)?;
 
     let session_section = format!("sso-session {}", session_name);
-    config.delete(Some(session_section.as_str()));
-    config
-        .with_section(Some(session_section.as_str()))
-        .set("sso_start_url", sso_defaults.get_start_url())
-        .set("sso_region", sso_defaults.get_sso_region())
-        .set("sso_registration_scopes", REGISTRATION_SCOPES);
+    let session_changed = set_owned_keys(
+        &mut config,
+        &session_section,
+        &[
+            ("sso_start_url", sso_defaults.get_start_url()),
+            ("sso_region", sso_defaults.get_sso_region()),
+            ("sso_registration_scopes", REGISTRATION_SCOPES),
+        ],
+    );
 
-    for profile in profiles {
+    let profiles_changed = profiles.iter().fold(false, |changed, profile| {
         let profile_section = format!("profile {}", profile.profile_name);
-        config.delete(Some(profile_section.as_str()));
-        config
-            .with_section(Some(profile_section.as_str()))
-            .set("sso_session", session_name)
-            .set("sso_account_id", profile.account_id.as_str())
-            .set("sso_role_name", profile.role_name.as_str())
-            .set("region", profile.region.as_str());
+        set_owned_keys(
+            &mut config,
+            &profile_section,
+            &[
+                ("sso_session", session_name),
+                ("sso_account_id", profile.account_id.as_str()),
+                ("sso_role_name", profile.role_name.as_str()),
+                ("region", profile.region.as_str()),
+            ],
+        ) || changed
+    });
+
+    if !session_changed && !profiles_changed && config_path.try_exists()? {
+        return Ok(());
     }
 
     if let Some(parent) = config_path.parent() {
@@ -68,6 +79,41 @@ pub fn write_sso_profiles(
         .with_context(|| "Unable to write the AWS config file.")?;
 
     Ok(())
+}
+
+fn set_owned_keys(config: &mut Ini, section: &str, keys: &[(&str, &str)]) -> bool {
+    keys.iter().fold(false, |changed, (key, value)| {
+        if config.get_from(Some(section), key) == Some(*value) {
+            return changed;
+        }
+        config.set_to(Some(section), key.to_string(), value.to_string());
+        true
+    })
+}
+
+/// Reads back every `[profile <name>]` block that belongs to the session.
+///
+/// Blocks come back in file order, which is the order they were written.
+pub fn read_sso_profiles(config_path: &Path, session_name: &str) -> Result<Vec<SsoProfile>> {
+    let config = load_or_create(config_path)?;
+
+    let profiles = config
+        .iter()
+        .filter_map(|(section, properties)| {
+            let profile_name = section?.strip_prefix("profile ")?;
+            if properties.get("sso_session") != Some(session_name) {
+                return None;
+            }
+            Some(SsoProfile {
+                profile_name: profile_name.to_string(),
+                account_id: properties.get("sso_account_id")?.to_string(),
+                role_name: properties.get("sso_role_name")?.to_string(),
+                region: properties.get("region")?.to_string(),
+            })
+        })
+        .collect();
+
+    Ok(profiles)
 }
 
 fn load_or_create(config_path: &Path) -> Result<Ini> {
@@ -85,7 +131,7 @@ fn load_or_create(config_path: &Path) -> Result<Ini> {
 
 #[cfg(test)]
 mod tests {
-    use super::{write_sso_profiles, SsoProfile};
+    use super::{read_sso_profiles, write_sso_profiles, SsoProfile};
     use crate::config::SsoDefaults;
     use ini::Ini;
     use std::path::{Path, PathBuf};
@@ -287,6 +333,68 @@ mod tests {
     }
 
     #[test]
+    fn keeps_a_key_it_does_not_own_inside_its_own_profile_block() {
+        let dir = TempDir::new("foreign-key");
+        let config_path = dir.file("config");
+        std::fs::write(
+            &config_path,
+            "[sso-session awsctl]\nsso_start_url = https://labflow.awsapps.com/start\nsso_region = us-east-1\nsso_registration_scopes = sso:account:access\ncli_history = enabled\n\n\
+             [profile dev]\nsso_session = awsctl\nsso_account_id = 111111111111\nsso_role_name = ReadOnly\nregion = us-east-1\noutput = json\ncli_pager =\n",
+        )
+        .expect("seed config");
+
+        write_sso_profiles(
+            &config_path,
+            "awsctl",
+            &defaults(),
+            &[profile("dev", "111111111111")],
+        )
+        .expect("writes");
+
+        assert_eq!(
+            value(&config_path, "profile dev", "output").as_deref(),
+            Some("json")
+        );
+        assert_eq!(
+            value(&config_path, "profile dev", "cli_pager").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            value(&config_path, "profile dev", "sso_role_name").as_deref(),
+            Some("AdministratorAccess")
+        );
+        assert_eq!(
+            value(&config_path, "profile dev", "region").as_deref(),
+            Some("eu-west-2")
+        );
+        assert_eq!(
+            value(&config_path, "sso-session awsctl", "cli_history").as_deref(),
+            Some("enabled")
+        );
+
+        let config = Ini::load_from_file(&config_path).expect("config parses");
+        let properties = config.section(Some("profile dev")).expect("profile dev");
+        assert_eq!(properties.get_all("sso_role_name").count(), 1);
+        assert_eq!(properties.get_all("region").count(), 1);
+    }
+
+    #[test]
+    fn leaves_the_file_untouched_when_nothing_changed() {
+        let dir = TempDir::new("untouched");
+        let config_path = dir.file("config");
+        let profiles = [profile("dev", "111111111111")];
+
+        write_sso_profiles(&config_path, "awsctl", &defaults(), &profiles).expect("first write");
+        let written = std::fs::read_to_string(&config_path).expect("reads back");
+        std::fs::write(&config_path, format!("; kept by hand\n{}", written)).expect("marks file");
+
+        write_sso_profiles(&config_path, "awsctl", &defaults(), &profiles).expect("second write");
+
+        let after = std::fs::read_to_string(&config_path).expect("reads back");
+        assert!(after.starts_with("; kept by hand\n"));
+    }
+
+    #[test]
     fn leaves_a_profile_it_wrote_earlier_but_was_not_asked_for_again() {
         let dir = TempDir::new("earlier");
         let config_path = dir.file("config");
@@ -314,5 +422,50 @@ mod tests {
             value(&config_path, "profile dev", "sso_account_id").as_deref(),
             Some("111111111111")
         );
+    }
+
+    #[test]
+    fn reads_back_the_profiles_of_its_session_in_file_order() {
+        let dir = TempDir::new("reads");
+        let config_path = dir.file("config");
+        std::fs::write(
+            &config_path,
+            "[default]\nregion = ap-southeast-2\n\n\
+             [sso-session awsctl]\nsso_start_url = https://labflow.awsapps.com/start\nsso_region = us-east-1\n\n\
+             [profile au]\nsso_session = awsctl\nsso_account_id = 222222222222\nsso_role_name = ReadOnly\nregion = ap-southeast-2\n\n\
+             [profile hand-written]\nrole_arn = arn:aws:iam::999999999999:role/ops\nsource_profile = default\n\n\
+             [profile other-sso]\nsso_session = other\nsso_account_id = 444444444444\nsso_role_name = ReadOnly\nregion = us-east-1\n\n\
+             [profile dev]\nsso_session = awsctl\nsso_account_id = 111111111111\nsso_role_name = AdministratorAccess\nregion = eu-west-2\n",
+        )
+        .expect("seed config");
+
+        let profiles = read_sso_profiles(&config_path, "awsctl").expect("reads");
+
+        assert_eq!(
+            profiles,
+            [
+                SsoProfile {
+                    profile_name: String::from("au"),
+                    account_id: String::from("222222222222"),
+                    role_name: String::from("ReadOnly"),
+                    region: String::from("ap-southeast-2"),
+                },
+                SsoProfile {
+                    profile_name: String::from("dev"),
+                    account_id: String::from("111111111111"),
+                    role_name: String::from("AdministratorAccess"),
+                    region: String::from("eu-west-2"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_nothing_when_the_file_is_missing() {
+        let dir = TempDir::new("reads-missing");
+
+        let profiles = read_sso_profiles(&dir.file("config"), "awsctl").expect("reads");
+
+        assert!(profiles.is_empty());
     }
 }

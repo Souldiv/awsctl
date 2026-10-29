@@ -4,7 +4,7 @@ mod config;
 mod utils;
 
 use crate::cli_tools::cli::{Cli, Commands, ConfigCommands};
-use crate::cli_tools::cli_manager::{CliManager, SsoSelections};
+use crate::cli_tools::cli_manager::{CliManager, SsoFlags, SsoSelections};
 use crate::config::constants::APP_NAME;
 use crate::config::{AccessToken, AccountConfig};
 use anyhow::{Context, Result};
@@ -32,16 +32,22 @@ async fn main() -> Result<()> {
             setup_profile,
             force,
             keep_alive,
+            switch_default,
+            list_profiles,
             account,
             role,
             region,
         } => {
             cli_manager
                 .sso_command(
-                    *get_access_token,
-                    *setup_profile,
-                    *force,
-                    *keep_alive,
+                    SsoFlags {
+                        get_access_token: *get_access_token,
+                        setup_profile: *setup_profile,
+                        force: *force,
+                        keep_alive: *keep_alive,
+                        switch_default: switch_default.clone(),
+                        list_profiles: *list_profiles,
+                    },
                     SsoSelections {
                         account: account.clone(),
                         role: role.clone(),

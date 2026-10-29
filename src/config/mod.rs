@@ -1,6 +1,7 @@
 pub mod access_token;
 pub mod account_config;
 pub mod aws_config_file;
+pub mod aws_credentials_file;
 pub mod constants;
 pub mod credentials;
 pub mod device_client;
