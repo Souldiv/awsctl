@@ -1,0 +1,60 @@
+name: CI
+
+# Pull request validation. The release workflow cross-builds optimised binaries
+# for two targets, which is too slow to be what every pull request runs, and it
+# ran no tests at all.
+#
+# clippy type-checks every target, so a separate `cargo check` on linux would
+# repeat that work. The macOS job is a `cargo check` because a second platform
+# is what it buys; awsctl ships binaries for both.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Format, lint and test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Add Rust components
+        run: rustup component add clippy rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-ubuntu-22.04
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      # Advisory, not blocking: the tree carries 30 clippy findings that predate
+      # this workflow, so `-D warnings` would fail every pull request on work
+      # nobody in it touched. Append `-- -D warnings` once they are cleared.
+      - name: Lint
+        run: cargo clippy --all-targets
+
+      - name: Test
+        run: cargo test
+
+  compile:
+    name: Compile (aarch64-apple-darwin)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-macos-14
+
+      - name: Check
+        run: cargo check --all-targets
