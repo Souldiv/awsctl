@@ -11,7 +11,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use crate::config::AccessToken;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountInfo {
     pub account_name: String,
     pub account_id: String,
@@ -54,6 +54,32 @@ impl AccountInfoProvider {
         }
 
         Ok(account_infos)
+    }
+
+    pub async fn get_account_roles(
+        &self,
+        access_token: &AccessToken,
+        account_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut paginator = self
+            .client
+            .list_account_roles()
+            .access_token(access_token.access_token.as_str())
+            .account_id(account_id)
+            .max_results(100)
+            .into_paginator()
+            .send();
+
+        let mut role_names = Vec::new();
+        while let Some(page) = paginator.next().await {
+            for role in page?.role_list() {
+                if let Some(role_name) = role.role_name() {
+                    role_names.push(String::from(role_name));
+                }
+            }
+        }
+
+        Ok(role_names)
     }
 
     pub async fn get_role_credentials(

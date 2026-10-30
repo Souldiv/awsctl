@@ -65,7 +65,7 @@ pub enum Commands {
             long,
             group = "sso",
             value_name = "PROFILE",
-            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive", "list_profiles"]
+            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive", "list_profiles", "refresh"]
         )]
         switch_default: Option<Option<String>>,
 
@@ -74,9 +74,17 @@ pub enum Commands {
             short = 'l',
             long,
             group = "sso",
-            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive"]
+            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive", "refresh"]
         )]
         list_profiles: bool,
+
+        /// renew the SSO token and the [default] credentials of the profiles --setup-profile wrote
+        #[arg(
+            long,
+            group = "sso",
+            conflicts_with_all = ["setup_profile", "get_access_token", "keep_alive"]
+        )]
+        refresh: bool,
 
         /// account name or account id to authenticate directly (skips interactive selection)
         #[arg(short, long, requires = "sso")]
@@ -210,4 +218,41 @@ pub enum Commands {
         #[arg(short, long)]
         count: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn parses_refresh_on_its_own() {
+        let cli = Cli::try_parse_from(["awsctl", "sso", "--refresh"]).expect("parses");
+
+        assert!(matches!(cli.command, Commands::Sso { refresh: true, .. }));
+    }
+
+    #[test]
+    fn parses_refresh_with_force() {
+        let cli = Cli::try_parse_from(["awsctl", "sso", "--refresh", "--force"]).expect("parses");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Sso {
+                refresh: true,
+                force: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_refresh_alongside_setup_profile() {
+        assert!(Cli::try_parse_from(["awsctl", "sso", "--refresh", "--setup-profile"]).is_err());
+    }
+
+    #[test]
+    fn rejects_refresh_alongside_switch_default() {
+        assert!(Cli::try_parse_from(["awsctl", "sso", "--refresh", "--switch-default"]).is_err());
+    }
 }

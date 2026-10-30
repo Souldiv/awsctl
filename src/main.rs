@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
             keep_alive,
             switch_default,
             list_profiles,
+            refresh,
             account,
             role,
             region,
@@ -47,6 +48,7 @@ async fn main() -> Result<()> {
                         keep_alive: *keep_alive,
                         switch_default: switch_default.clone(),
                         list_profiles: *list_profiles,
+                        refresh: *refresh,
                     },
                     SsoSelections {
                         account: account.clone(),

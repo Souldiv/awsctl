@@ -19,6 +19,16 @@ pub async fn get_access_token(
     sso_defaults: &SsoDefaults,
     force: bool,
 ) -> Result<()> {
+    renew_access_token(access_token, sso_defaults, force)
+        .await
+        .map(|_| ())
+}
+
+async fn renew_access_token(
+    access_token: AccessToken,
+    sso_defaults: &SsoDefaults,
+    force: bool,
+) -> Result<AccessToken> {
     let token = (access_token.is_set() && !force).then(|| access_token);
     let access_token = SsoAccessTokenProvider::new(
         sso_defaults.get_start_url().to_string(),
@@ -33,6 +43,36 @@ pub async fn get_access_token(
     println!("Access token was generated.");
 
     helper::update_sso_token_cache(&access_token, sso_defaults)?;
+
+    Ok(access_token)
+}
+
+pub async fn refresh(
+    access_token: AccessToken,
+    account_info_provider: &AccountInfoProvider,
+    account_config: &AccountConfig,
+    sso_defaults: &SsoDefaults,
+    force: bool,
+) -> Result<()> {
+    let profile = account_config.get_current_profile().ok_or_else(|| {
+        anyhow!("No profile is set up yet. Run 'awsctl sso --setup-profile' first.")
+    })?;
+
+    let access_token = renew_access_token(access_token, sso_defaults, force).await?;
+    write_default_credentials(
+        account_info_provider,
+        &access_token,
+        profile.get_account_id(),
+        profile.get_role_name(),
+    )
+    .await?;
+
+    println!(
+        "Refreshed the credentials for account {} ({}) with role {}.",
+        profile.get_account_name(),
+        profile.get_account_id(),
+        profile.get_role_name()
+    );
 
     Ok(())
 }
@@ -111,11 +151,16 @@ pub async fn setup_profile(
             region,
         )]
     } else {
-        helper::prompt_for_profiles(
+        let selection = helper::prompt_for_profiles(
             account_config.get_list_of_regions(),
             account_config.get_list_of_roles(),
             list_of_acc,
-        )?
+        )?;
+        if selection.every_account {
+            with_granted_roles(account_info_provider, access_token, selection.profiles).await?
+        } else {
+            selection.profiles
+        }
     };
 
     let plan = profile_plan::plan_profiles(&profiles, account_config.get_profile_names())?;
@@ -126,27 +171,68 @@ pub async fn setup_profile(
     helper::update_aws_config_file(&sso_defaults, &plan.sso_profiles)?;
     helper::update_sso_token_cache(access_token, &sso_defaults)?;
 
-    let creds: Credentials = account_info_provider
-        .get_role_credentials(
-            &access_token,
-            plan.default_profile.get_account_id(),
-            plan.default_profile.get_role_name(),
-        )
-        .await?
-        .into();
-
-    let _ = helper::update_credentials_file(
-        creds.access_key_id(),
-        creds.secret_access_key(),
-        creds.session_token().unwrap(),
-    )?;
-
-    confy::store(APP_NAME, "role-credentials", creds)
-        .with_context(|| "Unable to store credentials")?;
+    write_default_credentials(
+        account_info_provider,
+        access_token,
+        plan.default_profile.get_account_id(),
+        plan.default_profile.get_role_name(),
+    )
+    .await?;
 
     println!("Profile was setup successfully");
 
     Ok(())
+}
+
+async fn with_granted_roles(
+    account_info_provider: &AccountInfoProvider,
+    access_token: &AccessToken,
+    profiles: Vec<Profile>,
+) -> Result<Vec<Profile>> {
+    let mut granted_profiles = Vec::with_capacity(profiles.len());
+
+    for profile in profiles {
+        let granted = account_info_provider
+            .get_account_roles(access_token, profile.get_account_id())
+            .await?;
+        match profile_plan::pick_role(profile.get_role_name(), &granted) {
+            Some(role_name) => granted_profiles.push(Profile::new(
+                profile.get_account_name().to_string(),
+                profile.get_account_id().to_string(),
+                role_name,
+                profile.get_region().to_string(),
+            )),
+            None => println!(
+                "Skipping account {} ({}): it grants you no role.",
+                profile.get_account_name(),
+                profile.get_account_id()
+            ),
+        }
+    }
+
+    Ok(granted_profiles)
+}
+
+async fn write_default_credentials(
+    account_info_provider: &AccountInfoProvider,
+    access_token: &AccessToken,
+    account_id: &str,
+    role_name: &str,
+) -> Result<()> {
+    let creds: Credentials = account_info_provider
+        .get_role_credentials(access_token, account_id, role_name)
+        .await?
+        .into();
+    let session_token = creds
+        .session_token()
+        .ok_or_else(|| anyhow!("AWS returned role credentials without a session token."))?;
+
+    helper::update_credentials_file(
+        creds.access_key_id(),
+        creds.secret_access_key(),
+        session_token,
+    )?;
+    confy::store(APP_NAME, "role-credentials", creds).with_context(|| "Unable to store credentials")
 }
 
 fn report_name_clashes(plan: &ProfilePlan) {
@@ -178,22 +264,14 @@ pub async fn switch_default(
     };
     let profile = written_profiles::to_current_profile(&chosen, account_config.get_profile_names());
 
-    let creds: Credentials = account_info_provider
-        .get_role_credentials(access_token, &chosen.account_id, &chosen.role_name)
-        .await?
-        .into();
-    let session_token = creds
-        .session_token()
-        .ok_or_else(|| anyhow!("AWS returned role credentials without a session token."))?;
-
-    helper::update_credentials_file(
-        creds.access_key_id(),
-        creds.secret_access_key(),
-        session_token,
-    )?;
+    write_default_credentials(
+        account_info_provider,
+        access_token,
+        &chosen.account_id,
+        &chosen.role_name,
+    )
+    .await?;
     account_config.set_profile(profile.clone())?;
-    confy::store(APP_NAME, "role-credentials", creds)
-        .with_context(|| "Unable to store credentials")?;
 
     println!(
         "[default] now points at account {} ({}) with role {}.",

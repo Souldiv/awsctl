@@ -35,6 +35,7 @@ pub struct SsoFlags {
     pub keep_alive: bool,
     pub switch_default: Option<Option<String>>,
     pub list_profiles: bool,
+    pub refresh: bool,
 }
 
 pub struct CliManager {
@@ -104,8 +105,19 @@ impl CliManager {
             flags.setup_profile,
             flags.keep_alive,
             flags.switch_default,
+            flags.refresh,
         ) {
-            (false, false, false, Some(profile_name)) => {
+            (.., true) => {
+                sso_command::refresh(
+                    self.access_token,
+                    &acc_info_provider,
+                    &self.cfg,
+                    sso_defaults,
+                    flags.force,
+                )
+                .await?;
+            }
+            (false, false, false, Some(profile_name), _) => {
                 sso_command::switch_default(
                     &self.access_token,
                     &acc_info_provider,
@@ -119,7 +131,7 @@ impl CliManager {
                 sso_command::get_access_token(self.access_token, sso_defaults, flags.force).await?;
             }
             // setup profile
-            (_, true, false, _) => {
+            (_, true, false, ..) => {
                 sso_command::setup_profile(
                     &self.access_token,
                     &acc_info_provider,
@@ -130,7 +142,7 @@ impl CliManager {
                 .await?;
             }
             // start keep alive
-            (_, false, true, _) => loop {
+            (_, false, true, ..) => loop {
                 sso_command::start_keep_alive(&self.access_token, &acc_info_provider, &self.cfg)
                     .await?;
             },
