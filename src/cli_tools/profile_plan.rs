@@ -69,9 +69,17 @@ pub fn plan_profiles(
     })
 }
 
+pub fn pick_role(preferred: &str, granted: &[String]) -> Option<String> {
+    granted
+        .iter()
+        .find(|role_name| *role_name == preferred)
+        .or_else(|| granted.first())
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::plan_profiles;
+    use super::{pick_role, plan_profiles};
     use crate::config::Profile;
     use std::collections::BTreeMap;
 
@@ -180,5 +188,34 @@ mod tests {
         let error = plan_profiles(&[], &configured(&[])).unwrap_err();
 
         assert!(error.to_string().contains("No account was selected"));
+    }
+
+    fn roles(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn picks_the_chosen_role_when_the_account_grants_it() {
+        let role = pick_role(
+            "AdministratorAccess",
+            &roles(&["ReadOnlyAccess", "AdministratorAccess"]),
+        );
+
+        assert_eq!(role.as_deref(), Some("AdministratorAccess"));
+    }
+
+    #[test]
+    fn falls_back_to_the_first_role_the_account_grants() {
+        let role = pick_role(
+            "AdministratorAccess",
+            &roles(&["ReadOnlyAccess", "PowerUserAccess"]),
+        );
+
+        assert_eq!(role.as_deref(), Some("ReadOnlyAccess"));
+    }
+
+    #[test]
+    fn picks_nothing_for_an_account_that_grants_no_role() {
+        assert_eq!(pick_role("AdministratorAccess", &[]), None);
     }
 }

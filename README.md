@@ -67,6 +67,7 @@ Sign in and choose the accounts and role you want:
 ```bash
 awsctl sso --get-access-token   # authenticate in the browser
 awsctl sso --setup-profile      # pick accounts and a role, write the AWS profiles
+awsctl sso --refresh            # renew the session and the [default] credentials
 awsctl sso --keep-alive         # refresh the session in the background
 ```
 
@@ -82,6 +83,20 @@ in `~/.aws/config`, so you reach the others without signing in again:
 aws s3 ls --profile au
 AWS_PROFILE=au aws eks list-clusters
 ```
+
+Tick `All accounts` at the top of the list to write a profile for every account
+your sign-in can reach, in one pass. Each account gets the role you pick when it
+grants that role, and otherwise the first role it does grant; an account that
+grants none is skipped. Naming follows the rules under [Naming your
+profiles](#naming-your-profiles), as for a single pick.
+
+After that one-time setup, `awsctl sso --refresh` is the only command you need
+day to day. It asks no setup questions. It renews the SSO token, which every
+written profile mints its credentials from, and re-mints the `[default]`
+credentials in `~/.aws/credentials` for the profile `[default]` holds. While the
+cached token is still valid it reuses it, so there is no browser round trip;
+once the token has expired, it opens the browser to sign you in again. Add
+`--force` to sign in again even when the token is still valid.
 
 Those profiles share one `[sso-session awsctl]` block, which the AWS CLI and the
 SDKs use to mint and refresh role credentials on their own. After the session

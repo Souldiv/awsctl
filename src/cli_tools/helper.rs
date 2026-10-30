@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use inquire::validator::MinLengthValidator;
 use inquire::{MultiSelect, Select, Text};
+use std::fmt::Display;
 use std::path::PathBuf;
 
 use crate::aws::AccountInfo;
@@ -11,6 +12,25 @@ use crate::config::{
     AccessToken, AccountConfig, Profile, SsoDefaults, SsoProfile, SSO_SESSION_NAME,
 };
 
+pub struct ProfileSelection {
+    pub profiles: Vec<Profile>,
+    pub every_account: bool,
+}
+
+enum AccountChoice {
+    All,
+    Account(AccountInfo),
+}
+
+impl Display for AccountChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccountChoice::All => write!(f, "All accounts"),
+            AccountChoice::Account(account_info) => account_info.fmt(f),
+        }
+    }
+}
+
 /// Prompts for one or more accounts, then for the region and role they share.
 ///
 /// The returned profiles lead with the account that takes the `[default]`
@@ -19,8 +39,8 @@ pub fn prompt_for_profiles(
     list_of_regions: Vec<String>,
     list_of_roles: Vec<String>,
     list_of_account_info: Vec<AccountInfo>,
-) -> Result<Vec<Profile>> {
-    let accounts = prompt_for_accounts(list_of_account_info)?;
+) -> Result<ProfileSelection> {
+    let (accounts, every_account) = prompt_for_accounts(list_of_account_info)?;
     let region = Select::new("Select Profile Region: ", list_of_regions)
         .prompt()
         .with_context(|| "There was an error displaying regions. Please try again.")?;
@@ -28,7 +48,7 @@ pub fn prompt_for_profiles(
         .prompt()
         .with_context(|| "There was an error displaying roles. Please try again.")?;
 
-    Ok(accounts
+    let profiles = accounts
         .into_iter()
         .map(|account_info| {
             Profile::new(
@@ -38,16 +58,52 @@ pub fn prompt_for_profiles(
                 region.clone(),
             )
         })
-        .collect())
+        .collect();
+
+    Ok(ProfileSelection {
+        profiles,
+        every_account,
+    })
 }
 
-fn prompt_for_accounts(list_of_account_info: Vec<AccountInfo>) -> Result<Vec<AccountInfo>> {
-    let accounts = MultiSelect::new("Select Profile Accounts: ", list_of_account_info)
+fn prompt_for_accounts(list_of_account_info: Vec<AccountInfo>) -> Result<(Vec<AccountInfo>, bool)> {
+    let choices = std::iter::once(AccountChoice::All)
+        .chain(
+            list_of_account_info
+                .iter()
+                .cloned()
+                .map(AccountChoice::Account),
+        )
+        .collect();
+    let chosen = MultiSelect::new("Select Profile Accounts: ", choices)
         .with_validator(MinLengthValidator::new(1).with_message("Select at least one account."))
         .prompt()
         .with_context(|| "There was an error displaying account info. Please try again.")?;
 
-    default_account_first(accounts)
+    let (accounts, every_account) = accounts_for(chosen, list_of_account_info);
+    Ok((default_account_first(accounts)?, every_account))
+}
+
+fn accounts_for(
+    chosen: Vec<AccountChoice>,
+    every_account: Vec<AccountInfo>,
+) -> (Vec<AccountInfo>, bool) {
+    if chosen
+        .iter()
+        .any(|choice| matches!(choice, AccountChoice::All))
+    {
+        return (every_account, true);
+    }
+
+    let accounts = chosen
+        .into_iter()
+        .filter_map(|choice| match choice {
+            AccountChoice::Account(account_info) => Some(account_info),
+            AccountChoice::All => None,
+        })
+        .collect();
+
+    (accounts, false)
 }
 
 // inquire reports ticked options in list order rather than the order they were
@@ -195,7 +251,76 @@ pub fn update_aws_config_file(sso_defaults: &SsoDefaults, profiles: &[SsoProfile
 
 #[cfg(test)]
 mod tests {
-    use super::validate_region;
+    use super::{accounts_for, validate_region, AccountChoice};
+    use crate::aws::AccountInfo;
+
+    fn account(account_name: &str, account_id: &str) -> AccountInfo {
+        AccountInfo {
+            account_name: String::from(account_name),
+            account_id: String::from(account_id),
+        }
+    }
+
+    fn every_account() -> Vec<AccountInfo> {
+        vec![
+            account("example-dev", "111111111111"),
+            account("example-au", "222222222222"),
+            account("example-prod-eu", "333333333333"),
+        ]
+    }
+
+    fn account_ids(accounts: &[AccountInfo]) -> Vec<&str> {
+        accounts
+            .iter()
+            .map(|account_info| account_info.account_id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn choosing_all_selects_every_account() {
+        let (accounts, every) = accounts_for(vec![AccountChoice::All], every_account());
+
+        assert!(every);
+        assert_eq!(
+            account_ids(&accounts),
+            ["111111111111", "222222222222", "333333333333"]
+        );
+    }
+
+    #[test]
+    fn choosing_all_alongside_one_account_still_selects_every_account() {
+        let chosen = vec![
+            AccountChoice::All,
+            AccountChoice::Account(account("example-au", "222222222222")),
+        ];
+
+        let (accounts, every) = accounts_for(chosen, every_account());
+
+        assert!(every);
+        assert_eq!(accounts.len(), 3);
+    }
+
+    #[test]
+    fn keeps_only_the_accounts_picked_without_all() {
+        let chosen = vec![AccountChoice::Account(account(
+            "example-au",
+            "222222222222",
+        ))];
+
+        let (accounts, every) = accounts_for(chosen, every_account());
+
+        assert!(!every);
+        assert_eq!(account_ids(&accounts), ["222222222222"]);
+    }
+
+    #[test]
+    fn labels_the_all_choice() {
+        assert_eq!(AccountChoice::All.to_string(), "All accounts");
+        assert_eq!(
+            AccountChoice::Account(account("example-au", "222222222222")).to_string(),
+            "example-au - 222222222222"
+        );
+    }
 
     fn regions() -> Vec<String> {
         vec![String::from("us-east-1"), String::from("eu-west-1")]
