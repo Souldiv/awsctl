@@ -5,6 +5,7 @@ use std::fmt::Display;
 use std::path::PathBuf;
 
 use crate::aws::AccountInfo;
+use crate::cli_tools::written_profiles::FALLBACK_REGION;
 use crate::config::constants::APP_NAME;
 use crate::config::sso_token_cache;
 use crate::config::{aws_config_file, aws_credentials_file};
@@ -39,9 +40,16 @@ pub fn prompt_for_profiles(
     list_of_regions: Vec<String>,
     list_of_roles: Vec<String>,
     list_of_account_info: Vec<AccountInfo>,
+    last_region: impl Fn(&str) -> String,
 ) -> Result<ProfileSelection> {
     let (accounts, every_account) = prompt_for_accounts(list_of_account_info)?;
+    let starting_region = accounts
+        .first()
+        .map(|account_info| last_region(&account_info.account_id))
+        .unwrap_or_else(|| String::from(FALLBACK_REGION));
+    let (list_of_regions, starting_cursor) = regions_starting_at(list_of_regions, starting_region);
     let region = Select::new("Select Profile Region: ", list_of_regions)
+        .with_starting_cursor(starting_cursor)
         .prompt()
         .with_context(|| "There was an error displaying regions. Please try again.")?;
     let role_name = Select::new("Select Profile Role: ", list_of_roles)
@@ -64,6 +72,13 @@ pub fn prompt_for_profiles(
         profiles,
         every_account,
     })
+}
+
+fn regions_starting_at(list_of_regions: Vec<String>, region: String) -> (Vec<String>, usize) {
+    match list_of_regions.iter().position(|known| *known == region) {
+        Some(index) => (list_of_regions, index),
+        None => (std::iter::once(region).chain(list_of_regions).collect(), 0),
+    }
 }
 
 fn prompt_for_accounts(list_of_account_info: Vec<AccountInfo>) -> Result<(Vec<AccountInfo>, bool)> {
@@ -251,7 +266,7 @@ pub fn update_aws_config_file(sso_defaults: &SsoDefaults, profiles: &[SsoProfile
 
 #[cfg(test)]
 mod tests {
-    use super::{accounts_for, validate_region, AccountChoice};
+    use super::{accounts_for, regions_starting_at, validate_region, AccountChoice};
     use crate::aws::AccountInfo;
 
     fn account(account_name: &str, account_id: &str) -> AccountInfo {
@@ -338,5 +353,21 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("mars-north-1"));
         assert!(message.contains("us-east-1, eu-west-1"));
+    }
+
+    #[test]
+    fn starts_the_region_prompt_at_the_last_region() {
+        let (regions, cursor) = regions_starting_at(regions(), String::from("eu-west-1"));
+
+        assert_eq!(regions, ["us-east-1", "eu-west-1"]);
+        assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn offers_the_last_region_first_when_the_list_lacks_it() {
+        let (regions, cursor) = regions_starting_at(regions(), String::from("ap-southeast-2"));
+
+        assert_eq!(regions, ["ap-southeast-2", "us-east-1", "eu-west-1"]);
+        assert_eq!(cursor, 0);
     }
 }

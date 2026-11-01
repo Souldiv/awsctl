@@ -111,6 +111,13 @@ pub async fn setup_profile(
     );
     account_config.seed_profile_names(&discovered);
 
+    let current_profile = account_config.get_current_profile().cloned();
+    let written =
+        aws_config_file::read_sso_profiles(&aws_config_file::aws_config_path()?, SSO_SESSION_NAME)?;
+    let last_region = |account_id: &str| {
+        written_profiles::last_region_for(account_id, current_profile.as_ref(), &written)
+    };
+
     let profiles = if let Some(account_filter) = account {
         let account_info = list_of_acc
             .into_iter()
@@ -133,11 +140,7 @@ pub async fn setup_profile(
                 .unwrap_or_else(|| String::from("AdministratorAccess"))
         });
 
-        let region = account_config
-            .get_list_of_regions()
-            .first()
-            .cloned()
-            .unwrap_or_else(|| String::from("us-east-1"));
+        let region = last_region(&account_info.account_id);
 
         println!(
             "Switching to account: {} ({}) with role: {} in region: {}",
@@ -155,6 +158,7 @@ pub async fn setup_profile(
             account_config.get_list_of_regions(),
             account_config.get_list_of_roles(),
             list_of_acc,
+            last_region,
         )?;
         if selection.every_account {
             with_granted_roles(account_info_provider, access_token, selection.profiles).await?
