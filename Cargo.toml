@@ -1,6 +1,6 @@
 [package]
 name = "awsctl"
-version = "1.2.3"
+version = "1.2.4"
 edition = "2021"
 description = "CLI for AWS SSO, EC2, RDS, SSM and EKS operations"
 repository = "https://github.com/Souldiv/awsctl"
