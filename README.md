@@ -19,7 +19,19 @@ account, role or URL of its own.
 
 ## Install
 
-Download the archive for your platform from the
+With the install script, which puts `awsctl` in `~/.cargo/bin`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Souldiv/awsctl/releases/latest/download/awsctl-installer.sh | sh
+```
+
+With Cargo:
+
+```bash
+cargo install awsctl
+```
+
+Or download the archive for your platform from the
 [releases](https://github.com/Souldiv/awsctl/releases) page, then:
 
 ```bash
