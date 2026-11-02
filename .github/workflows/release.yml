@@ -1,12 +1,5 @@
 name: Release
 
-# Tag-driven release. Push a version tag (e.g. v1.0.6) and this workflow builds
-# the binaries, packages them as the archives the Homebrew formula expects, and
-# publishes a GitHub Release. The tag is the source of truth: Cargo.toml's
-# version is synced to the tag at build time, so no version-bump commit is
-# needed. Pull requests are validated by ci.yml instead; this workflow runs on
-# a tag, or on demand via workflow_dispatch to rehearse a release build.
-#
 # Produces, per release:
 #   - awsctl-x86_64-unknown-linux-gnu.tar.xz (+ .sha256)
 #   - awsctl-aarch64-apple-darwin.tar.xz     (+ .sha256)

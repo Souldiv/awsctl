@@ -1,6 +1,6 @@
 [package]
 name = "awsctl"
-version = "1.0.5"
+version = "1.2.3"
 edition = "2021"
 repository = "https://github.com/Souldiv/awsctl"
 license = "MIT"

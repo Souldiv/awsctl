@@ -1,0 +1,53 @@
+name: Release-plz
+
+# Both jobs use the RELEASE_PLZ_TOKEN secret, a fine-grained token with
+# Contents and Pull requests read/write on this repository. Tags and PRs made
+# with GITHUB_TOKEN start no other workflow, so with it the tag would never
+# reach release.yml and CI would never run on the release PR.
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run release-plz
+        uses: release-plz/action@v0.5.147
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run release-plz
+        uses: release-plz/action@v0.5.147
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
