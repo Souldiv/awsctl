@@ -12,18 +12,21 @@ in `Cargo.lock` currently require 1.94.1 or newer.
 
 ## Releasing
 
-Releases are tag-driven: the tag is the source of truth for the version, so no
-version-bump commit is needed. Create a version tag and push it.
+Releases go through release-plz (`.github/workflows/release-plz.yml`). Every
+push to `main` opens or updates a release PR that bumps the version in
+`Cargo.toml` and adds the changes since the last tag to `CHANGELOG.md`. The
+bump follows the conventional commit prefixes: `fix:` gives a patch release,
+`feat:` a minor one, and a breaking change a major one. Edit the PR to change
+the version or the changelog.
 
-```bash
-git tag -a v1.0.6 -m "Release v1.0.6"
-git push origin v1.0.6
-```
+Merging the release PR pushes the version tag (for example `v1.2.3`).
+`.github/workflows/release.yml` then builds the macOS arm64 and Linux x86_64
+binaries and publishes a GitHub Release with both archives attached. Nothing is
+published to crates.io.
 
-`.github/workflows/release.yml` then syncs `Cargo.toml` to the tag, builds the
-macOS arm64 and Linux x86_64 binaries, and publishes a GitHub Release with both
-archives attached. Release notes are generated from the commits since the
-previous tag, which is why this repository keeps no hand-maintained changelog.
+The workflow needs a `RELEASE_PLZ_TOKEN` secret: a fine-grained personal access
+token for this repository with Contents and Pull requests set to read and write.
+A tag pushed with the default `GITHUB_TOKEN` would not start `release.yml`.
 
 ### Homebrew tap (optional)
 
