@@ -1,5 +1,5 @@
 [workspace]
-publish = false
+publish = true
 git_only = true
 git_tag_name = "v{{ version }}"
 git_release_enable = false

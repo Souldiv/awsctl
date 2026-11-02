@@ -2,8 +2,14 @@
 name = "awsctl"
 version = "1.2.3"
 edition = "2021"
+description = "CLI for AWS SSO, EC2, RDS, SSM and EKS operations"
 repository = "https://github.com/Souldiv/awsctl"
+homepage = "https://github.com/Souldiv/awsctl"
 license = "MIT"
+readme = "README.md"
+keywords = ["aws", "sso", "ssm", "eks", "cli"]
+categories = ["command-line-utilities"]
+include = ["/src", "/Config.toml", "/README.md", "/LICENSE", "/CHANGELOG.md"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -36,3 +42,8 @@ k8s-openapi = { version = "0.28.0", features = ["latest"] }
 kube = { version = "4.2.0", features = ["runtime", "derive"] }
 schemars = { version = "1.2.3" }
 rustls = { version = "0.23.46", features = ["aws-lc-rs"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
