@@ -19,12 +19,6 @@ account, role or URL of its own.
 
 ## Install
 
-With Homebrew:
-
-```bash
-brew install Souldiv/tap/awsctl
-```
-
 With the install script, which puts `awsctl` in `~/.cargo/bin`:
 
 ```bash
