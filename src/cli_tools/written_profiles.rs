@@ -4,6 +4,24 @@ use std::collections::BTreeMap;
 use crate::config::{Profile, SsoProfile};
 
 const DEFAULT_MARKER: &str = "*";
+pub const FALLBACK_REGION: &str = "ap-southeast-2";
+
+pub fn last_region_for(
+    account_id: &str,
+    current: Option<&Profile>,
+    written: &[SsoProfile],
+) -> String {
+    current
+        .filter(|current| current.get_account_id() == account_id)
+        .map(|current| current.get_region().to_string())
+        .or_else(|| {
+            written
+                .iter()
+                .find(|profile| profile.account_id == account_id)
+                .map(|profile| profile.region.clone())
+        })
+        .unwrap_or_else(|| String::from(FALLBACK_REGION))
+}
 
 pub fn find_profile<'a>(profiles: &'a [SsoProfile], profile_name: &str) -> Result<&'a SsoProfile> {
     profiles
@@ -85,7 +103,7 @@ fn is_current(profile: &SsoProfile, current: Option<&Profile>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_profile, format_listing, to_current_profile};
+    use super::{find_profile, format_listing, last_region_for, to_current_profile};
     use crate::config::{Profile, SsoProfile};
     use std::collections::BTreeMap;
 
@@ -197,5 +215,46 @@ mod tests {
             lines,
             ["  dev  111111111111  AdministratorAccess  eu-west-2"]
         );
+    }
+
+    fn current(account_id: &str, region: &str) -> Profile {
+        Profile::new(
+            String::from("labflow-saas-au"),
+            String::from(account_id),
+            String::from("AdministratorAccess"),
+            String::from(region),
+        )
+    }
+
+    #[test]
+    fn keeps_the_region_of_the_current_profile_for_its_account() {
+        let region = last_region_for(
+            "222222222222",
+            Some(&current("222222222222", "ap-southeast-4")),
+            &[profile("au", "222222222222")],
+        );
+
+        assert_eq!(region, "ap-southeast-4");
+    }
+
+    #[test]
+    fn takes_the_region_written_for_the_account_when_it_is_not_current() {
+        let region = last_region_for(
+            "222222222222",
+            Some(&current("111111111111", "us-west-2")),
+            &[
+                profile("dev", "111111111111"),
+                profile("au", "222222222222"),
+            ],
+        );
+
+        assert_eq!(region, "eu-west-2");
+    }
+
+    #[test]
+    fn falls_back_to_ap_southeast_2_for_an_account_never_set_up() {
+        let region = last_region_for("333333333333", None, &[profile("dev", "111111111111")]);
+
+        assert_eq!(region, "ap-southeast-2");
     }
 }
