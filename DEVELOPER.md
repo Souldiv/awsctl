@@ -35,7 +35,7 @@ The release path needs three secrets:
 - `RELEASE_PLZ_TOKEN`: a fine-grained personal access token for this repository
   with Contents and Pull requests set to read and write. A tag pushed with the
   default `GITHUB_TOKEN` would not start `release.yml`.
-- `CARGO_REGISTRY_TOKEN`: a crates.io API token with the `publish-update` scope.
+- `CARGO_REGISTRY_TOKEN`: a crates.io API token with the `publish-new` and `publish-update` scopes.
 - `HOMEBREW_TAP_TOKEN`: a fine-grained personal access token with Contents set
   to read and write on `Souldiv/homebrew-tap`. Without it the release still
   publishes; only the formula update fails.

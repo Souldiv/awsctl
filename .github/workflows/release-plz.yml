@@ -6,7 +6,7 @@ name: Release-plz
 # reach release.yml and CI would never run on the release PR.
 #
 # The release job also publishes the crate to crates.io with the
-# CARGO_REGISTRY_TOKEN secret, an API token with the publish-update scope.
+# CARGO_REGISTRY_TOKEN secret, an API token with the publish-new and publish-update scopes.
 
 on:
   push:
