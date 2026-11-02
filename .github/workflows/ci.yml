@@ -45,7 +45,7 @@ jobs:
 
   compile:
     name: Compile (aarch64-apple-darwin)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,7 +54,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-macos-14
+          shared-key: ci-macos-15
 
       - name: Check
         run: cargo check --all-targets
