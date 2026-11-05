@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Run release-plz
-        uses: release-plz/action@v0.5.147
+        uses: release-plz/action@v0.5.148
         with:
           command: release
         env:
@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false
 
       - name: Run release-plz
-        uses: release-plz/action@v0.5.147
+        uses: release-plz/action@v0.5.148
         with:
           command: release-pr
         env:
