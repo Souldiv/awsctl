@@ -1,5 +1,6 @@
 use crate::config::profile::Profile;
 use crate::config::profile_name::ResolvedProfileName;
+use crate::config::tunnel_group::TunnelGroupEntry;
 use crate::config::SsoDefaults;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,8 @@ pub struct AccountConfig {
     regions: Vec<String>,
     #[serde(default)]
     profile_names: BTreeMap<String, String>,
+    #[serde(default)]
+    tunnel_groups: BTreeMap<String, Vec<TunnelGroupEntry>>,
 }
 
 impl Default for AccountConfig {
@@ -23,6 +26,7 @@ impl Default for AccountConfig {
             roles: vec![String::from("AdministratorAccess")],
             regions: vec![String::from("us-east-1"), String::from("eu-west-2")],
             profile_names: BTreeMap::new(),
+            tunnel_groups: BTreeMap::new(),
         }
     }
 }
@@ -46,6 +50,10 @@ impl AccountConfig {
 
     pub fn get_profile_names(&self) -> &BTreeMap<String, String> {
         &self.profile_names
+    }
+
+    pub fn get_tunnel_groups(&self) -> &BTreeMap<String, Vec<TunnelGroupEntry>> {
+        &self.tunnel_groups
     }
 
     pub fn set_profile(&mut self, profile: Profile) -> Result<()> {
@@ -81,6 +89,7 @@ impl AccountConfig {
 mod tests {
     use super::AccountConfig;
     use crate::config::profile_name::ResolvedProfileName;
+    use crate::config::tunnel_group::{TunnelGroupEntry, TunnelGroupTable};
 
     fn resolved(account_name: &str, account_id: &str, profile_name: &str) -> ResolvedProfileName {
         ResolvedProfileName {
@@ -166,6 +175,68 @@ mod tests {
 
         assert!(config.is_defaults_set());
         assert!(config.get_profile_names().is_empty());
+        assert!(config.get_tunnel_groups().is_empty());
+    }
+
+    #[test]
+    fn reads_tunnel_groups_written_as_targets_or_tables() {
+        let stored = r#"
+            roles = ["AdministratorAccess"]
+            regions = ["us-east-1"]
+
+            [tunnel_groups]
+            work = [
+                "dev:example-eks",
+                { cluster = "example-k8s", profile = "prod", local_port = 21443 },
+            ]
+        "#;
+
+        let config: AccountConfig = toml::from_str(stored).expect("config parses");
+
+        assert_eq!(
+            config.get_tunnel_groups()["work"],
+            [
+                TunnelGroupEntry::Target(String::from("dev:example-eks")),
+                TunnelGroupEntry::Detailed(TunnelGroupTable {
+                    cluster: String::from("example-k8s"),
+                    profile: Some(String::from("prod")),
+                    region: None,
+                    local_port: Some(21443),
+                    bastion: None,
+                    account_label: None,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_tunnel_groups_when_the_config_is_stored_again() {
+        let stored = r#"
+            roles = ["AdministratorAccess"]
+            regions = ["us-east-1"]
+
+            [tunnel_groups]
+            work = ["dev:example-eks", { cluster = "example-k8s", bastion = "i-0123456789abcdef0" }]
+        "#;
+        let config: AccountConfig = toml::from_str(stored).expect("config parses");
+
+        let rewritten = toml::to_string(&config).expect("serialises");
+        let read_back: AccountConfig = toml::from_str(&rewritten).expect("parses again");
+
+        assert_eq!(read_back.get_tunnel_groups(), config.get_tunnel_groups());
+    }
+
+    #[test]
+    fn rejects_a_misspelt_tunnel_group_field() {
+        let stored = r#"
+            roles = ["AdministratorAccess"]
+            regions = ["us-east-1"]
+
+            [tunnel_groups]
+            work = [{ cluster = "example-eks", proflie = "dev" }]
+        "#;
+
+        assert!(toml::from_str::<AccountConfig>(stored).is_err());
     }
 
     #[test]

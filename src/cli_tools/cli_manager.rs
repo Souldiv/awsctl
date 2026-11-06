@@ -1,9 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use aws_config::retry::RetryConfig;
 use aws_config::SdkConfig;
-use aws_sdk_ssm::config::AppName;
-use aws_sdk_ssm::config::SharedCredentialsProvider;
-use aws_sdk_sso::config::Credentials as AWSCredentials;
 use aws_sdk_ssooidc as ssooidc;
 use chrono::{DateTime, Utc};
 use std::process::Command;
@@ -17,11 +13,11 @@ use crate::aws::SnapshotProvider;
 use crate::aws::SsmProvider;
 use crate::cli_tools::cli::Host;
 use crate::cli_tools::cli::SnapshotType;
-use crate::cli_tools::cli_commands::eks_tunnel_command::{TunnelOptions, TunnelProviders};
+use crate::cli_tools::cli_commands::eks_tunnel_command::{StoredRoleAccount, TunnelOptions};
 use crate::cli_tools::cli_commands::{eks_command, eks_tunnel_command, ssh_command, sso_command};
-use crate::cli_tools::{helper, written_profiles};
+use crate::cli_tools::{helper, sdk_config, written_profiles};
 use crate::config::constants::APP_NAME;
-use crate::config::{aws_config_file, AccessToken, AccountConfig, Credentials, SSO_SESSION_NAME};
+use crate::config::{aws_config_file, AccessToken, AccountConfig, SSO_SESSION_NAME};
 
 const DEFAULT_AWS_PROFILE: &str = "default";
 
@@ -53,46 +49,12 @@ impl CliManager {
 
     // function for handling setup for most providers, region overrides the profile region
     fn create_config(&self, region: Option<&str>) -> Result<SdkConfig> {
-        let role_credentials: Credentials = confy::load(APP_NAME, "role-credentials")
-            .with_context(|| "There was an error reading the credentials.")?;
+        let profile = self
+            .cfg
+            .get_current_profile()
+            .ok_or_else(|| anyhow!("Please set your profile and try again."))?;
 
-        if !role_credentials.is_set() {
-            return Err(anyhow!("Generate credentials and try again."));
-        }
-
-        if self.cfg.get_current_profile().is_none() {
-            return Err(anyhow!("Please set your profile and try again."));
-        }
-
-        let profile = self.cfg.get_current_profile().unwrap();
-        let region = region.unwrap_or_else(|| profile.get_region());
-        let role_credentials: AWSCredentials = role_credentials.into();
-
-        let retry_config = RetryConfig::standard();
-        let scp = SharedCredentialsProvider::new(role_credentials);
-        let config = aws_config::SdkConfig::builder()
-            .app_name(AppName::new(APP_NAME)?)
-            .credentials_provider(scp)
-            .behavior_version(aws_sdk_ssm::config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(region.to_string()))
-            .retry_config(retry_config)
-            .build();
-
-        Ok(config)
-    }
-
-    async fn create_profile_config(profile: &str, region: Option<&str>) -> SdkConfig {
-        let loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .app_name(AppName::new(APP_NAME).expect("APP_NAME is a valid app name"))
-            .profile_name(profile)
-            .retry_config(RetryConfig::standard());
-
-        match region {
-            Some(region) => loader.region(aws_config::Region::new(region.to_string())),
-            None => loader,
-        }
-        .load()
-        .await
+        sdk_config::stored_role_sdk_config(region.unwrap_or_else(|| profile.get_region()))
     }
 
     fn stable_profile_for_default_account(&self) -> String {
@@ -227,11 +189,11 @@ impl CliManager {
         update: bool,
         list: bool,
         region: Option<String>,
-        cluster: Option<String>,
+        clusters: Vec<String>,
         tunnel: Option<TunnelOptions>,
     ) -> Result<()> {
         if let Some(options) = tunnel {
-            return self.eks_tunnel_command(region, cluster, options).await;
+            return self.eks_tunnel_command(region, &clusters, options).await;
         }
 
         let config = self.create_config(region.as_deref())?;
@@ -239,6 +201,11 @@ impl CliManager {
 
         match (update, list) {
             (true, ..) => {
+                let cluster = match clusters.as_slice() {
+                    [] => None,
+                    [cluster] => Some(cluster.clone()),
+                    _ => return Err(anyhow!("--update takes one --cluster at a time.")),
+                };
                 println!("Updating kubeconfig...");
                 let region = region.unwrap_or_else(|| {
                     self.cfg
@@ -263,30 +230,29 @@ impl CliManager {
     async fn eks_tunnel_command(
         &self,
         region: Option<String>,
-        cluster: Option<String>,
+        clusters: &[String],
         options: TunnelOptions,
     ) -> Result<()> {
-        let (config, aws_profile) = match &options.profile {
-            Some(profile) => (
-                Self::create_profile_config(profile, region.as_deref()).await,
-                profile.clone(),
-            ),
-            None => (
-                self.create_config(region.as_deref())?,
-                self.stable_profile_for_default_account(),
-            ),
+        let stored_role = StoredRoleAccount {
+            region: self
+                .cfg
+                .get_current_profile()
+                .map(|profile| profile.get_region().to_string()),
+            profile_name: self.stable_profile_for_default_account(),
         };
-        let region = config
-            .region()
-            .map(|region| region.to_string())
-            .ok_or_else(|| anyhow!("Profile '{}' sets no region. Pass --region.", aws_profile))?;
 
-        let providers = TunnelProviders {
-            eks: &EksProvider::new(&config),
-            ec2: &EC2Provider::new(&config),
-            ssm: &SsmProvider::new(&config),
-        };
-        eks_tunnel_command::open_tunnel(providers, &region, &aws_profile, cluster, options).await
+        eks_tunnel_command::open_tunnels(
+            clusters,
+            region,
+            options,
+            self.cfg.get_tunnel_groups(),
+            stored_role,
+        )
+        .await
+    }
+
+    pub fn eks_tunnel_status_command(&self) -> Result<()> {
+        eks_tunnel_command::show_status()
     }
 
     pub fn config_command(

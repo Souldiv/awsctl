@@ -12,6 +12,8 @@ use crate::utils::private_file::replace_private_file;
 
 const EXEC_API_VERSION: &str = "client.authentication.k8s.io/v1beta1";
 const MAX_CLUSTER_NAME_LENGTH: usize = 100;
+const CONTEXT_PREFIX: &str = "ssm-";
+const MERGED_KUBECONFIG_NAME: &str = "awsctl-tunnels.yaml";
 
 pub struct TunnelTarget<'a> {
     pub cluster_name: &'a str,
@@ -40,18 +42,24 @@ pub fn validate_cluster_name(cluster_name: &str) -> Result<()> {
 }
 
 pub fn context_name(cluster_name: &str) -> String {
-    format!("ssm-{}", cluster_name)
+    format!("{}{}", CONTEXT_PREFIX, cluster_name)
 }
 
 pub fn default_kubeconfig_path(cluster_name: &str) -> Result<PathBuf> {
+    Ok(kube_dir()?.join(format!("{}.yaml", context_name(cluster_name))))
+}
+
+pub fn default_merged_kubeconfig_path() -> Result<PathBuf> {
+    Ok(kube_dir()?.join(MERGED_KUBECONFIG_NAME))
+}
+
+fn kube_dir() -> Result<PathBuf> {
     let home = directories::UserDirs::new()
         .context("Unable to get home directory")?
         .home_dir()
         .to_path_buf();
 
-    Ok(home
-        .join(".kube")
-        .join(format!("{}.yaml", context_name(cluster_name))))
+    Ok(home.join(".kube"))
 }
 
 pub fn with_tunnel(existing: Kubeconfig, target: &TunnelTarget) -> Kubeconfig {
@@ -72,6 +80,10 @@ pub fn with_tunnel(existing: Kubeconfig, target: &TunnelTarget) -> Kubeconfig {
         kind: existing.kind.or(Some(String::from("Config"))),
         ..existing
     }
+}
+
+pub fn with_tunnels(existing: Kubeconfig, targets: &[TunnelTarget]) -> Kubeconfig {
+    targets.iter().fold(existing, with_tunnel)
 }
 
 pub fn read_kubeconfig(path: &Path) -> Result<Kubeconfig> {
@@ -183,8 +195,8 @@ fn tunnel_context(name: &str) -> NamedContext {
 #[cfg(test)]
 mod tests {
     use super::{
-        context_name, read_kubeconfig, validate_cluster_name, with_tunnel, write_kubeconfig,
-        TunnelTarget,
+        context_name, read_kubeconfig, validate_cluster_name, with_tunnel, with_tunnels,
+        write_kubeconfig, TunnelTarget,
     };
     use crate::aws::eks::ClusterEndpoint;
     use kube::config::Kubeconfig;
@@ -334,6 +346,37 @@ contexts:
     }
 
     #[test]
+    fn merges_every_tunnel_into_one_kubeconfig() {
+        let endpoint = endpoint();
+        let second = TunnelTarget {
+            local_port: 22443,
+            aws_profile: "other-profile",
+            ..target(&endpoint, "example-k8s")
+        };
+
+        let merged = with_tunnels(
+            Kubeconfig::default(),
+            &[target(&endpoint, "example-eks"), second],
+        );
+
+        let names: Vec<&str> = merged.contexts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["ssm-example-eks", "ssm-example-k8s"]);
+        assert_eq!(merged.current_context.as_deref(), Some("ssm-example-eks"));
+        let servers: Vec<Option<&str>> = merged
+            .clusters
+            .iter()
+            .map(|c| c.cluster.as_ref().and_then(|c| c.server.as_deref()))
+            .collect();
+        assert_eq!(
+            servers,
+            [
+                Some("https://127.0.0.1:21443"),
+                Some("https://127.0.0.1:22443")
+            ]
+        );
+    }
+
+    #[test]
     fn writes_a_kubeconfig_only_its_owner_can_read_and_reads_it_back() {
         let dir = temp_dir("roundtrip");
         let path = dir.join("ssm-example-eks.yaml");
@@ -386,6 +429,11 @@ contexts:
         ] {
             assert!(validate_cluster_name(name).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn keeps_the_merged_kubeconfig_apart_from_every_cluster_file() {
+        assert!(!super::MERGED_KUBECONFIG_NAME.starts_with(super::CONTEXT_PREFIX));
     }
 
     #[test]

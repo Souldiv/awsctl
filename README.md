@@ -157,7 +157,8 @@ The remaining commands act on the profile you selected:
 | `awsctl ssm --create-document --document-path <file>` | Register an SSM document |
 | `awsctl eks --list` | List EKS clusters |
 | `awsctl eks --update` | Write the cluster's context into your kubeconfig |
-| `awsctl eks --tunnel` | Reach a private cluster's API through a bastion over SSM |
+| `awsctl eks --tunnel` | Reach private clusters' APIs through their bastions over SSM |
+| `awsctl eks --tunnel-status` | Show the tunnels running `awsctl` processes keep open |
 | `awsctl snapshot <aws\|eks\|cnpg> -n <namespace> -b <date>` | Count or delete snapshots older than a date |
 
 `awsctl snapshot` lists what it matched, or counts it with `--count`. It deletes
@@ -183,8 +184,7 @@ terminal:
 KUBECONFIG=~/.kube/ssm-<cluster>.yaml kubectl get nodes
 ```
 
-Each cluster gets its own local port, derived from its name, so tunnels to
-several clusters, in several accounts, can be open at once. The kubeconfig's
+Each cluster gets its own local port, derived from its name. The kubeconfig's
 `server` is `https://127.0.0.1:<port>`, and its `tls-server-name` is the real
 endpoint, so the certificate is still checked against the cluster's name and
 CA. Its user runs `aws eks get-token` with the same profile and region.
@@ -203,6 +203,93 @@ CA. Its user runs `aws eks get-token` with the same profile and region.
   another file, such as `~/.kube/config`. Other entries are kept, the file's
   current context is left alone unless it has none, and the file is rewritten
   readable only by you.
+
+#### Several clusters at once
+
+Name `--cluster` once per cluster. Write `<profile>:<cluster>` to reach each
+one through its own account:
+
+```bash
+awsctl eks --tunnel --cluster dev:<cluster> --cluster prod:<other-cluster>
+```
+
+One `awsctl` keeps every tunnel open. Each still gets its own port and its own
+`~/.kube/ssm-<cluster>.yaml`, and every context is also merged into
+`~/.kube/awsctl-tunnels.yaml` (or the file `--kubeconfig` names), so one
+kubeconfig reaches them all:
+
+```bash
+export KUBECONFIG=~/.kube/awsctl-tunnels.yaml
+kubectl --context ssm-<cluster> get nodes
+kubectl --context ssm-<other-cluster> get nodes
+```
+
+`--profile`, `--region` and `--account-label` apply to every cluster that does
+not set its own. `--local-port` and `--bastion` name one tunnel, so they work
+only with a single cluster. When two names derive the same port, the one that
+sorts later takes the next free port. A cluster name may appear only once,
+because its context and kubeconfig are named after it.
+
+To open the same set every day, list it under `[tunnel_groups]` in awsctl's
+config (`awsctl config edit`), and open it by name:
+
+```toml
+[tunnel_groups]
+work = [
+    "dev:<cluster>",
+    { cluster = "<other-cluster>", profile = "prod", local_port = 21443, bastion = "<instance-id>" },
+]
+```
+
+```bash
+awsctl eks --tunnel --group work
+```
+
+A table entry can set `cluster`, `profile`, `region`, `local_port`, `bastion`
+and `account_label`. `--cluster` adds clusters to a group's.
+
+#### Staying connected
+
+Session Manager ends a session after 20 idle minutes by default, when it is
+terminated, or when the laptop sleeps or changes network. `awsctl` reopens a
+tunnel whenever its session ends, waiting 1 second, then 2, 4 and so on up to
+5 minutes between attempts. A tunnel that stayed up for a minute starts the
+wait over.
+
+While a tunnel is up, `awsctl` asks the cluster for `/livez` through it every
+2 minutes, with no credentials, over TLS checked against the cluster's CA. The
+traffic keeps the session from idling out, and two failed checks in a row
+reopen a tunnel that is stuck.
+
+When the credentials behind a tunnel have expired or are missing, `awsctl`
+says so, marks the tunnel `needs login`, and stops reopening it. It checks
+again every minute with a read-only call, and reconnects once you have run
+`aws sso login --profile <profile>` or `awsctl sso --refresh`. Other tunnels
+keep running meanwhile.
+
+Ctrl-C, `SIGTERM` or closing the terminal stops every tunnel and terminates
+every session. A second Ctrl-C exits without waiting for them.
+
+#### Seeing what is running
+
+From any terminal:
+
+```bash
+awsctl eks --tunnel-status
+```
+
+```text
+CLUSTER          PROFILE  PORT   BASTION              STATE                UPTIME  LAST DROP
+<cluster>        dev      2xxxx  <instance-id>        up                   1h02m   25m10s ago: Your session timed out due to inactivity…
+<other-cluster>  prod     21443  <instance-id>        needs login (4m10s)  -       4m10s ago: credentials expired or missing; run `aws sso…
+
+awsctl pid 12345 has supervised 2 tunnel(s) for 3h15m
+```
+
+Each running `awsctl eks --tunnel` keeps its state in
+`tunnels/<pid>.json` next to awsctl's config file (`awsctl config --location`),
+readable only by you, and removes it on exit. A file left by an `awsctl` that
+crashed is spotted by its process id, left out, and removed.
 
 The bastion must be managed by Systems Manager, and your role needs
 `eks:DescribeCluster`, `ec2:DescribeInstances`,

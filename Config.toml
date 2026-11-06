@@ -36,3 +36,16 @@ sso_region = "us-east-1"
 # "labflow-dev-customer" = "dev"
 # "labflow-saas-au" = "au"
 # "123456789012" = "prod"
+
+# Clusters to tunnel to together, by name:
+#
+#     awsctl eks --tunnel --group work
+#
+# Each entry is "<profile>:<cluster>", or just "<cluster>" to use --profile or
+# the account behind [default]. A table can also pin the region, the local
+# port and the bastion, and pick the bastion's account label:
+#
+#     { cluster = "<cluster>", profile = "<profile>", region = "<region>",
+#       local_port = 21443, bastion = "<instance-id>", account_label = "<label>" }
+[tunnel_groups]
+# work = ["dev:example-eks", "prod:example-k8s"]
