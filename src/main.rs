@@ -4,6 +4,7 @@ mod config;
 mod utils;
 
 use crate::cli_tools::cli::{Cli, Commands, ConfigCommands};
+use crate::cli_tools::cli_commands::eks_tunnel_command::TunnelOptions;
 use crate::cli_tools::cli_manager::{CliManager, SsoFlags, SsoSelections};
 use crate::config::constants::APP_NAME;
 use crate::config::{AccessToken, AccountConfig};
@@ -71,11 +72,30 @@ async fn main() -> Result<()> {
         Commands::Eks {
             update,
             list,
+            tunnel,
             region,
             cluster,
+            profile,
+            local_port,
+            bastion,
+            account_label,
+            kubeconfig,
         } => {
+            let tunnel_options = tunnel.then(|| TunnelOptions {
+                profile: profile.clone(),
+                local_port: *local_port,
+                bastion: bastion.clone(),
+                account_label: account_label.clone(),
+                kubeconfig: kubeconfig.clone(),
+            });
             cli_manager
-                .eks_command(*update, *list, region.clone(), cluster.clone())
+                .eks_command(
+                    *update,
+                    *list,
+                    region.clone(),
+                    cluster.clone(),
+                    tunnel_options,
+                )
                 .await?;
         }
         Commands::Config {

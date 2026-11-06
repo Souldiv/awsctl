@@ -3,17 +3,13 @@ use chrono::{DateTime, Utc};
 use serde::{Serialize, Serializer};
 use sha1::{Digest, Sha1};
 use std::fmt;
-use std::fs::{DirBuilder, OpenOptions};
-use std::io::{ErrorKind, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::config::{AccessToken, SsoDefaults};
+use crate::utils::private_file::replace_private_file;
 
 const AWS_CLI_TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
 const EXPIRY_DISPLAY_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
-const CACHE_FILE_MODE: u32 = 0o600;
-const CACHE_DIR_MODE: u32 = 0o700;
 const AWS_CLI_RENEWAL_WINDOW_SECONDS: i64 = 15 * 60;
 
 #[derive(Serialize)]
@@ -140,7 +136,7 @@ pub fn write_sso_token(
     let contents = serde_json::to_string(&token)
         .with_context(|| "Unable to serialise the SSO token for the AWS CLI.")?;
 
-    write_private_file(cache_path, &contents)
+    replace_private_file(cache_path, &contents)
 }
 
 pub fn renewal_warning(access_token: &AccessToken) -> Option<String> {
@@ -154,76 +150,6 @@ pub fn renewal_warning(access_token: &AccessToken) -> Option<String> {
          Run 'awsctl sso -g -f' followed by 'awsctl sso -s' to give the AWS CLI a fresh one.",
         access_token.expires_at.format(EXPIRY_DISPLAY_FORMAT)
     ))
-}
-
-fn write_private_file(path: &Path, contents: &str) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        anyhow!(
-            "The SSO cache path {} has no parent directory.",
-            path.display()
-        )
-    })?;
-
-    DirBuilder::new()
-        .recursive(true)
-        .mode(CACHE_DIR_MODE)
-        .create(parent)
-        .with_context(|| {
-            format!(
-                "Unable to create the SSO cache directory {}.",
-                parent.display()
-            )
-        })?;
-
-    let temporary_path = temporary_path(path);
-    let written = fill_private_file(&temporary_path, contents).and_then(|()| {
-        std::fs::rename(&temporary_path, path).with_context(|| {
-            format!(
-                "Unable to move the SSO token into place at {}.",
-                path.display()
-            )
-        })
-    });
-
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary_path);
-    }
-
-    written
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| String::from("token"));
-
-    path.with_file_name(format!(".{}.{}.tmp", file_name, std::process::id()))
-}
-
-fn fill_private_file(path: &Path, contents: &str) -> Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Unable to clear the temporary file {}.", path.display()))
-        }
-    }
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(CACHE_FILE_MODE)
-        .open(path)
-        .with_context(|| format!("Unable to create {}.", path.display()))?;
-
-    file.write_all(contents.as_bytes())
-        .with_context(|| format!("Unable to write {}.", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("Unable to flush {}.", path.display()))?;
-
-    Ok(())
 }
 
 #[cfg(test)]

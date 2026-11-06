@@ -17,10 +17,13 @@ use crate::aws::SnapshotProvider;
 use crate::aws::SsmProvider;
 use crate::cli_tools::cli::Host;
 use crate::cli_tools::cli::SnapshotType;
-use crate::cli_tools::cli_commands::{eks_command, ssh_command, sso_command};
-use crate::cli_tools::helper;
+use crate::cli_tools::cli_commands::eks_tunnel_command::{TunnelOptions, TunnelProviders};
+use crate::cli_tools::cli_commands::{eks_command, eks_tunnel_command, ssh_command, sso_command};
+use crate::cli_tools::{helper, written_profiles};
 use crate::config::constants::APP_NAME;
-use crate::config::{AccessToken, AccountConfig, Credentials};
+use crate::config::{aws_config_file, AccessToken, AccountConfig, Credentials, SSO_SESSION_NAME};
+
+const DEFAULT_AWS_PROFILE: &str = "default";
 
 pub struct SsoSelections {
     pub account: Option<String>,
@@ -76,6 +79,31 @@ impl CliManager {
             .build();
 
         Ok(config)
+    }
+
+    async fn create_profile_config(profile: &str, region: Option<&str>) -> SdkConfig {
+        let loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .app_name(AppName::new(APP_NAME).expect("APP_NAME is a valid app name"))
+            .profile_name(profile)
+            .retry_config(RetryConfig::standard());
+
+        match region {
+            Some(region) => loader.region(aws_config::Region::new(region.to_string())),
+            None => loader,
+        }
+        .load()
+        .await
+    }
+
+    fn stable_profile_for_default_account(&self) -> String {
+        aws_config_file::aws_config_path()
+            .and_then(|path| aws_config_file::read_sso_profiles(&path, SSO_SESSION_NAME))
+            .ok()
+            .and_then(|profiles| {
+                written_profiles::profile_behind_default(&profiles, self.cfg.get_current_profile())
+                    .map(|profile| profile.profile_name.clone())
+            })
+            .unwrap_or_else(|| String::from(DEFAULT_AWS_PROFILE))
     }
 
     pub async fn sso_command(mut self, flags: SsoFlags, selections: SsoSelections) -> Result<()> {
@@ -200,7 +228,12 @@ impl CliManager {
         list: bool,
         region: Option<String>,
         cluster: Option<String>,
+        tunnel: Option<TunnelOptions>,
     ) -> Result<()> {
+        if let Some(options) = tunnel {
+            return self.eks_tunnel_command(region, cluster, options).await;
+        }
+
         let config = self.create_config(region.as_deref())?;
         let eks = EksProvider::new(&config);
 
@@ -225,6 +258,35 @@ impl CliManager {
         }
 
         Ok(())
+    }
+
+    async fn eks_tunnel_command(
+        &self,
+        region: Option<String>,
+        cluster: Option<String>,
+        options: TunnelOptions,
+    ) -> Result<()> {
+        let (config, aws_profile) = match &options.profile {
+            Some(profile) => (
+                Self::create_profile_config(profile, region.as_deref()).await,
+                profile.clone(),
+            ),
+            None => (
+                self.create_config(region.as_deref())?,
+                self.stable_profile_for_default_account(),
+            ),
+        };
+        let region = config
+            .region()
+            .map(|region| region.to_string())
+            .ok_or_else(|| anyhow!("Profile '{}' sets no region. Pass --region.", aws_profile))?;
+
+        let providers = TunnelProviders {
+            eks: &EksProvider::new(&config),
+            ec2: &EC2Provider::new(&config),
+            ssm: &SsmProvider::new(&config),
+        };
+        eks_tunnel_command::open_tunnel(providers, &region, &aws_profile, cluster, options).await
     }
 
     pub fn config_command(
