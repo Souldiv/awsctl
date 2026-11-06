@@ -1,6 +1,9 @@
+pub mod bastion;
 pub mod cli;
-mod cli_commands;
+pub mod cli_commands;
 pub mod cli_manager;
 pub mod helper;
 pub mod profile_plan;
+pub mod tunnel_kubeconfig;
+pub mod tunnel_port;
 pub mod written_profiles;

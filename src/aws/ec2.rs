@@ -1,5 +1,5 @@
 use aws_config::SdkConfig;
-use aws_sdk_ec2::types::{Filter, TagDescription};
+use aws_sdk_ec2::types::{Filter, Instance, TagDescription};
 use aws_sdk_ec2::Client;
 
 use anyhow::Result;
@@ -17,6 +17,41 @@ pub struct InstanceNameTag {
 impl Display for InstanceNameTag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.instance_name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaggedInstance {
+    pub instance_id: String,
+    pub name: Option<String>,
+    pub component: Option<String>,
+}
+
+impl Display for TaggedInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{} ({})", name, self.instance_id),
+            None => write!(f, "{}", self.instance_id),
+        }
+    }
+}
+
+impl From<&Instance> for TaggedInstance {
+    fn from(instance: &Instance) -> Self {
+        let tag_value = |key: &str| {
+            instance
+                .tags()
+                .iter()
+                .find(|tag| tag.key() == Some(key))
+                .and_then(|tag| tag.value())
+                .map(str::to_string)
+        };
+
+        TaggedInstance {
+            instance_id: instance.instance_id().unwrap_or_default().to_string(),
+            name: tag_value("Name"),
+            component: tag_value("Component"),
+        }
     }
 }
 
@@ -68,5 +103,45 @@ impl EC2Provider {
             .collect();
 
         Ok(instance_name_list)
+    }
+
+    pub async fn list_running_instances_in_vpc(
+        &self,
+        vpc_id: &str,
+        tag_filter: Filter,
+    ) -> Result<Vec<TaggedInstance>> {
+        let filters = vec![
+            Filter::builder().name("vpc-id").values(vpc_id).build(),
+            Filter::builder()
+                .name("instance-state-name")
+                .values("running")
+                .build(),
+            tag_filter,
+        ];
+
+        let mut instances: Vec<TaggedInstance> = vec![];
+        let mut next_token: Option<String> = None;
+        loop {
+            let output = self
+                .client
+                .describe_instances()
+                .set_filters(Some(filters.clone()))
+                .set_next_token(next_token)
+                .send()
+                .await?;
+            instances.extend(
+                output
+                    .reservations()
+                    .iter()
+                    .flat_map(|reservation| reservation.instances())
+                    .map(TaggedInstance::from),
+            );
+            next_token = output.next_token;
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(instances)
     }
 }

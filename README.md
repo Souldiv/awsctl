@@ -14,7 +14,7 @@ account, role or URL of its own.
 
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html)
 - The [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
-  for the AWS CLI, used by the `ssh` and `ssm` commands
+  for the AWS CLI, used by the `ssh`, `ssm` and `eks --tunnel` commands
 - `kubectl`, if you use the `eks` commands
 
 ## Install
@@ -157,12 +157,61 @@ The remaining commands act on the profile you selected:
 | `awsctl ssm --create-document --document-path <file>` | Register an SSM document |
 | `awsctl eks --list` | List EKS clusters |
 | `awsctl eks --update` | Write the cluster's context into your kubeconfig |
+| `awsctl eks --tunnel` | Reach a private cluster's API through a bastion over SSM |
 | `awsctl snapshot <aws\|eks\|cnpg> -n <namespace> -b <date>` | Count or delete snapshots older than a date |
 
 `awsctl snapshot` lists what it matched, or counts it with `--count`. It deletes
 only when you pass `--delete-all`, and asks first unless you also pass `--yes`.
 
 Run `awsctl --help`, or `awsctl <command> --help`, for the full set of flags.
+
+### Reaching a private EKS cluster over SSM
+
+`awsctl eks --tunnel` reaches a cluster whose API endpoint is private without a
+VPN. It forwards a local port through a bastion in the cluster's VPC to the
+endpoint on 443, using the `AWS-StartPortForwardingSessionToRemoteHost` Session
+Manager document, and writes a kubeconfig that points at that port:
+
+```bash
+awsctl eks --tunnel --profile <profile> --cluster <cluster>
+```
+
+Leave it running; Ctrl-C closes the forward and ends the session. In another
+terminal:
+
+```bash
+KUBECONFIG=~/.kube/ssm-<cluster>.yaml kubectl get nodes
+```
+
+Each cluster gets its own local port, derived from its name, so tunnels to
+several clusters, in several accounts, can be open at once. The kubeconfig's
+`server` is `https://127.0.0.1:<port>`, and its `tls-server-name` is the real
+endpoint, so the certificate is still checked against the cluster's name and
+CA. Its user runs `aws eks get-token` with the same profile and region.
+
+- `--profile` picks the AWS profile. Without it, `awsctl` uses its own
+  credentials for the lookups and writes the profile it set up for that
+  account into the kubeconfig, or `default` when it wrote none.
+- `--region` overrides the profile's region.
+- `--local-port <port>` overrides the derived port. `awsctl` stops if the port
+  is already in use.
+- `--bastion <instance-id>` skips discovery. Otherwise `awsctl` looks in the
+  cluster's VPC for a running instance tagged `Component=bastion`, then one
+  named `*-jump-host` (preferring `<label>-jump-host` with `--account-label
+  <label>`), then one named `bastion-host`. It asks when several match.
+- `--kubeconfig <file>` writes the tunnel's cluster, user and context into
+  another file, such as `~/.kube/config`. Other entries are kept, the file's
+  current context is left alone unless it has none, and the file is rewritten
+  readable only by you.
+
+The bastion must be managed by Systems Manager, and your role needs
+`eks:DescribeCluster`, `ec2:DescribeInstances`,
+`ssm:DescribeInstanceInformation`, `ssm:StartSession` on the bastion and the
+port-forwarding document, and `ssm:TerminateSession`. Unless your account sets
+`ssm:SessionDocumentAccessCheck`, `ssm:StartSession` on an instance also allows
+a shell on it, and the port-forwarding document forwards to any host the
+bastion can reach. `awsctl` itself only ever forwards to the cluster endpoint
+on 443, but the grant is wider than that.
 
 ### Known issue
 

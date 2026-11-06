@@ -94,6 +94,13 @@ pub fn format_listing(profiles: &[SsoProfile], current: Option<&Profile>) -> Vec
         .collect()
 }
 
+pub fn profile_behind_default<'a>(
+    profiles: &'a [SsoProfile],
+    current: Option<&Profile>,
+) -> Option<&'a SsoProfile> {
+    profiles.iter().find(|profile| is_current(profile, current))
+}
+
 fn is_current(profile: &SsoProfile, current: Option<&Profile>) -> bool {
     current.is_some_and(|current| {
         current.get_account_id() == profile.account_id
@@ -103,7 +110,9 @@ fn is_current(profile: &SsoProfile, current: Option<&Profile>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_profile, format_listing, last_region_for, to_current_profile};
+    use super::{
+        find_profile, format_listing, last_region_for, profile_behind_default, to_current_profile,
+    };
     use crate::config::{Profile, SsoProfile};
     use std::collections::BTreeMap;
 
@@ -256,5 +265,30 @@ mod tests {
         let region = last_region_for("333333333333", None, &[profile("dev", "111111111111")]);
 
         assert_eq!(region, "ap-southeast-2");
+    }
+
+    #[test]
+    fn finds_the_written_profile_behind_default() {
+        let profiles = [
+            profile("dev", "111111111111"),
+            profile("au", "222222222222"),
+        ];
+        let current = Profile::new(
+            String::from("example-account"),
+            String::from("222222222222"),
+            String::from("AdministratorAccess"),
+            String::from("eu-west-2"),
+        );
+
+        let found = profile_behind_default(&profiles, Some(&current)).expect("found");
+
+        assert_eq!(found.profile_name, "au");
+    }
+
+    #[test]
+    fn finds_no_profile_behind_default_when_none_is_set() {
+        let profiles = [profile("dev", "111111111111")];
+
+        assert!(profile_behind_default(&profiles, None).is_none());
     }
 }

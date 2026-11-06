@@ -3,13 +3,9 @@ use anyhow::{Context, Result};
 use inquire::Select;
 use std::process::Command;
 
-pub async fn update_kubeconfig(
-    eks: &EksProvider,
-    region: &str,
-    cluster: Option<String>,
-) -> Result<()> {
-    let selected_cluster = match cluster {
-        Some(cluster) => cluster,
+pub async fn select_cluster(eks: &EksProvider, cluster: Option<String>) -> Result<String> {
+    match cluster {
+        Some(cluster) => Ok(cluster),
         None => {
             let mut clusters = eks.list_clusters().await?;
 
@@ -17,9 +13,17 @@ pub async fn update_kubeconfig(
 
             Select::new("Select Cluster: ", clusters)
                 .prompt()
-                .with_context(|| "There was an error displaying clusters. Please try again.")?
+                .with_context(|| "There was an error displaying clusters. Please try again.")
         }
-    };
+    }
+}
+
+pub async fn update_kubeconfig(
+    eks: &EksProvider,
+    region: &str,
+    cluster: Option<String>,
+) -> Result<()> {
+    let selected_cluster = select_cluster(eks, cluster).await?;
 
     let mut aws_eks_command = Command::new("aws");
     // temporary fix for the issue since update-kubeconfig method does not exist in aws-sdk-eks

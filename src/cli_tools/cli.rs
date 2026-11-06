@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 fn parse_datetime(s: &str) -> Result<DateTime<Utc>, String> {
     s.parse::<DateTime<Utc>>().map_err(|_| {
@@ -165,13 +166,38 @@ pub enum Commands {
         #[arg(short, long, group = "eks")]
         list: bool,
 
+        /// forward a local port to the cluster's API through its bastion over SSM, and write a
+        /// kubeconfig for it; runs until Ctrl-C
+        #[arg(short, long, groups = ["eks", "tunnel_mode"], conflicts_with_all = ["update", "list"])]
+        tunnel: bool,
+
         /// aws region to use (defaults to the current profile region)
         #[arg(short, long, requires = "eks")]
         region: Option<String>,
 
-        /// cluster name to update kubeconfig for (skips interactive selection)
-        #[arg(short, long, requires = "update", conflicts_with = "list")]
+        /// cluster name to update kubeconfig for or tunnel to (skips interactive selection)
+        #[arg(short, long, requires = "eks", conflicts_with = "list")]
         cluster: Option<String>,
+
+        /// AWS profile to tunnel with (defaults to the account behind [default])
+        #[arg(short, long, requires = "tunnel_mode")]
+        profile: Option<String>,
+
+        /// local port for the tunnel (defaults to a port derived from the cluster name)
+        #[arg(long, requires = "tunnel_mode", value_parser = clap::value_parser!(u16).range(1024..))]
+        local_port: Option<u16>,
+
+        /// instance id of the bastion to tunnel through (skips discovery)
+        #[arg(short, long, requires = "tunnel_mode")]
+        bastion: Option<String>,
+
+        /// prefer the bastion named <ACCOUNT_LABEL>-jump-host during discovery
+        #[arg(long, requires = "tunnel_mode")]
+        account_label: Option<String>,
+
+        /// kubeconfig to write the tunnel's context into (defaults to ~/.kube/ssm-<cluster>.yaml)
+        #[arg(short, long, requires = "tunnel_mode")]
+        kubeconfig: Option<PathBuf>,
     },
     /// Configuration settings
     #[group(required = true, multiple = false)]
@@ -254,5 +280,55 @@ mod tests {
     #[test]
     fn rejects_refresh_alongside_switch_default() {
         assert!(Cli::try_parse_from(["awsctl", "sso", "--refresh", "--switch-default"]).is_err());
+    }
+
+    #[test]
+    fn parses_tunnel_with_its_options() {
+        let cli = Cli::try_parse_from([
+            "awsctl",
+            "eks",
+            "--tunnel",
+            "--cluster",
+            "example-eks",
+            "--profile",
+            "example",
+            "--local-port",
+            "21443",
+            "--bastion",
+            "i-0123456789abcdef0",
+        ])
+        .expect("parses");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Eks {
+                tunnel: true,
+                local_port: Some(21443),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_tunnel_alongside_update() {
+        assert!(Cli::try_parse_from(["awsctl", "eks", "--tunnel", "--update"]).is_err());
+    }
+
+    #[test]
+    fn rejects_tunnel_options_without_tunnel() {
+        assert!(
+            Cli::try_parse_from(["awsctl", "eks", "--update", "--local-port", "21443"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["awsctl", "eks", "--list", "--profile", "example"]).is_err());
+    }
+
+    #[test]
+    fn rejects_a_privileged_local_port() {
+        assert!(Cli::try_parse_from(["awsctl", "eks", "--tunnel", "--local-port", "443"]).is_err());
+    }
+
+    #[test]
+    fn still_rejects_cluster_on_its_own() {
+        assert!(Cli::try_parse_from(["awsctl", "eks", "--cluster", "example-eks"]).is_err());
     }
 }
