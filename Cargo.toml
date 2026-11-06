@@ -43,6 +43,12 @@ kube = { version = "4.2.0", features = ["runtime", "derive"] }
 schemars = { version = "1.2.3" }
 rustls = { version = "0.23.46", features = ["aws-lc-rs"] }
 serde-saphyr = "0.0.29"
+tokio-rustls = { version = "0.26.6", default-features = false }
+base64 = "0.22.1"
+libc = "0.2.191"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["full", "test-util"] }
 
 # The profile that 'dist' will build with
 [profile.dist]

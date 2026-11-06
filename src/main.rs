@@ -70,11 +70,19 @@ async fn main() -> Result<()> {
             cli_manager.info_command(*accounts, *roles, *test).await?;
         }
         Commands::Eks {
+            tunnel_status: true,
+            ..
+        } => {
+            cli_manager.eks_tunnel_status_command()?;
+        }
+        Commands::Eks {
             update,
             list,
             tunnel,
+            tunnel_status: false,
             region,
             cluster,
+            group,
             profile,
             local_port,
             bastion,
@@ -87,6 +95,7 @@ async fn main() -> Result<()> {
                 bastion: bastion.clone(),
                 account_label: account_label.clone(),
                 kubeconfig: kubeconfig.clone(),
+                group: group.clone(),
             });
             cli_manager
                 .eks_command(

@@ -689,6 +689,7 @@ dependencies = [
  "aws-sdk-sso",
  "aws-sdk-ssooidc",
  "aws-smithy-types-convert",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "confy",
@@ -698,6 +699,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "kube-derive",
+ "libc",
  "rust-ini",
  "rustls 0.23.46",
  "schemars",
@@ -707,6 +709,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "tokio",
+ "tokio-rustls 0.26.6",
  "toml 1.1.8+spec-1.1.0",
  "webbrowser",
 ]

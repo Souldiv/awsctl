@@ -9,6 +9,7 @@ pub mod profile;
 pub mod profile_name;
 pub mod sso_defaults;
 pub mod sso_token_cache;
+pub mod tunnel_group;
 
 pub use access_token::AccessToken;
 pub use account_config::AccountConfig;

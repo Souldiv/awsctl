@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::process::Command;
 use std::time::Duration;
+use tokio::process::Child;
 
 const SESSION_MANAGER_PLUGIN: &str = "session-manager-plugin";
 const PLUGIN_INSTALL_URL: &str = "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html";
 const PLUGIN_EXIT_GRACE: Duration = Duration::from_secs(5);
+const PORT_FORWARD_DOCUMENT: &str = "AWS-StartPortForwardingSessionToRemoteHost";
 
 pub fn ensure_session_manager_plugin() -> Result<()> {
     match Command::new(SESSION_MANAGER_PLUGIN).arg("--version").output() {
@@ -217,18 +219,15 @@ impl SsmProvider {
         Ok(())
     }
 
-    pub async fn create_port_forward_session(
+    pub async fn start_port_forward_session(
         &self,
         instance_id: &str,
-        rds_instance_endpoint: &str,
+        remote_host: &str,
         local_port: i32,
         remote_port: i32,
-    ) -> Result<()> {
+    ) -> Result<PortForwardSession> {
         let params = HashMap::from([
-            (
-                String::from("host"),
-                vec![rds_instance_endpoint.to_string()],
-            ),
+            (String::from("host"), vec![remote_host.to_string()]),
             (String::from("portNumber"), vec![remote_port.to_string()]),
             (
                 String::from("localPortNumber"),
@@ -236,36 +235,54 @@ impl SsmProvider {
             ),
         ]);
 
-        ensure_session_manager_plugin()?;
-
         let output = self
             .client
             .start_session()
-            .document_name("AWS-StartPortForwardingSessionToRemoteHost")
+            .document_name(PORT_FORWARD_DOCUMENT)
             .target(instance_id)
             .set_parameters(Some(params))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "Unable to start a Session Manager session through {}.",
+                    instance_id
+                )
+            })?;
         let session_id = output
             .session_id()
             .ok_or_else(|| anyhow!("Systems Manager returned no session id."))?
+            .to_string();
+        let region = self
+            .client
+            .config()
+            .region()
+            .ok_or_else(|| anyhow!("No region is set for Systems Manager."))?
             .to_string();
 
         // create ssm plugin json message
         let response = json!({
             "SessionId": session_id,
-            "TokenValue": output.token_value().unwrap().to_string(),
-            "StreamUrl": output.stream_url().unwrap().to_string()
+            "TokenValue": output.token_value().unwrap_or_default(),
+            "StreamUrl": output.stream_url().unwrap_or_default()
         });
-        let region = self.client.config().region().unwrap();
 
-        let response_string = serde_json::to_string(&response)?;
-        let forwarded = run_port_forward_plugin(response_string, region.as_ref().to_string()).await;
+        Ok(PortForwardSession {
+            session_id,
+            plugin_args: vec![
+                serde_json::to_string(&response)?,
+                region.clone(),
+                String::from("StartSession"),
+                format!("https://ssm.{}.amazonaws.com/", region),
+            ],
+        })
+    }
 
+    pub async fn terminate_session(&self, session_id: &str) {
         if let Err(error) = self
             .client
             .terminate_session()
-            .session_id(&session_id)
+            .session_id(session_id)
             .send()
             .await
         {
@@ -274,21 +291,62 @@ impl SsmProvider {
                 session_id, error
             );
         }
+    }
+
+    pub async fn create_port_forward_session(
+        &self,
+        instance_id: &str,
+        rds_instance_endpoint: &str,
+        local_port: i32,
+        remote_port: i32,
+    ) -> Result<()> {
+        ensure_session_manager_plugin()?;
+
+        let session = self
+            .start_port_forward_session(instance_id, rds_instance_endpoint, local_port, remote_port)
+            .await?;
+        let forwarded = run_port_forward_plugin(&session).await;
+        self.terminate_session(&session.session_id).await;
 
         forwarded
     }
 }
 
+pub struct PortForwardSession {
+    pub session_id: String,
+    plugin_args: Vec<String>,
+}
+
+impl PortForwardSession {
+    pub fn plugin_command(&self) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(SESSION_MANAGER_PLUGIN);
+        command.args(&self.plugin_args);
+        command
+    }
+}
+
+pub async fn stop_plugin(plugin: &mut Child) -> Result<()> {
+    if let Some(pid) = plugin.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+        // SAFETY: kill only sends SIGTERM to the plugin awsctl spawned, whose
+        // pid it still holds because the child has not been reaped.
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+    if tokio::time::timeout(PLUGIN_EXIT_GRACE, plugin.wait())
+        .await
+        .is_err()
+    {
+        plugin.kill().await?;
+    }
+    Ok(())
+}
+
 /// Ctrl-C reaches the plugin too, so it is given a moment to exit on its own
 /// before it is killed.
-async fn run_port_forward_plugin(response: String, region: String) -> Result<()> {
-    let mut plugin = tokio::process::Command::new(SESSION_MANAGER_PLUGIN)
-        .args([
-            response,
-            region.clone(),
-            String::from("StartSession"),
-            format!("https://ssm.{}.amazonaws.com/", region),
-        ])
+async fn run_port_forward_plugin(session: &PortForwardSession) -> Result<()> {
+    let mut plugin = session
+        .plugin_command()
         .spawn()
         .with_context(|| format!("Unable to start {}.", SESSION_MANAGER_PLUGIN))?;
 
@@ -307,14 +365,6 @@ async fn run_port_forward_plugin(response: String, region: String) -> Result<()>
             SESSION_MANAGER_PLUGIN,
             status
         )),
-        None => {
-            if tokio::time::timeout(PLUGIN_EXIT_GRACE, plugin.wait())
-                .await
-                .is_err()
-            {
-                plugin.kill().await?;
-            }
-            Ok(())
-        }
+        None => stop_plugin(&mut plugin).await,
     }
 }

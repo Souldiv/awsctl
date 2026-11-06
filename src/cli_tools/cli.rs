@@ -166,28 +166,53 @@ pub enum Commands {
         #[arg(short, long, group = "eks")]
         list: bool,
 
-        /// forward a local port to the cluster's API through its bastion over SSM, and write a
-        /// kubeconfig for it; runs until Ctrl-C
-        #[arg(short, long, groups = ["eks", "tunnel_mode"], conflicts_with_all = ["update", "list"])]
+        /// forward a local port to each cluster's API through its bastion over SSM, and write a
+        /// kubeconfig for it; reconnects dropped tunnels and runs until Ctrl-C
+        #[arg(
+            short,
+            long,
+            groups = ["eks", "tunnel_mode"],
+            conflicts_with_all = ["update", "list", "tunnel_status"]
+        )]
         tunnel: bool,
+
+        /// show the tunnels every running `awsctl eks --tunnel` keeps open
+        #[arg(
+            long,
+            group = "eks",
+            conflicts_with_all = ["update", "list", "cluster", "region"]
+        )]
+        tunnel_status: bool,
 
         /// aws region to use (defaults to the current profile region)
         #[arg(short, long, requires = "eks")]
         region: Option<String>,
 
-        /// cluster name to update kubeconfig for or tunnel to (skips interactive selection)
-        #[arg(short, long, requires = "eks", conflicts_with = "list")]
-        cluster: Option<String>,
+        /// cluster to update kubeconfig for or tunnel to (skips interactive selection); with
+        /// --tunnel, repeat it to open several, written <profile>:<cluster> for a profile per cluster
+        #[arg(
+            short,
+            long,
+            value_name = "[PROFILE:]CLUSTER",
+            requires = "eks",
+            conflicts_with = "list"
+        )]
+        cluster: Vec<String>,
 
-        /// AWS profile to tunnel with (defaults to the account behind [default])
+        /// tunnel to every cluster listed under this name in [tunnel_groups] of awsctl's config
+        #[arg(short, long, requires = "tunnel_mode")]
+        group: Option<String>,
+
+        /// AWS profile to tunnel with, for clusters that name none (defaults to the account
+        /// behind [default])
         #[arg(short, long, requires = "tunnel_mode")]
         profile: Option<String>,
 
-        /// local port for the tunnel (defaults to a port derived from the cluster name)
+        /// local port for a single tunnel (defaults to a port derived from the cluster name)
         #[arg(long, requires = "tunnel_mode", value_parser = clap::value_parser!(u16).range(1024..))]
         local_port: Option<u16>,
 
-        /// instance id of the bastion to tunnel through (skips discovery)
+        /// instance id of the bastion to tunnel through, for a single tunnel (skips discovery)
         #[arg(short, long, requires = "tunnel_mode")]
         bastion: Option<String>,
 
@@ -195,7 +220,9 @@ pub enum Commands {
         #[arg(long, requires = "tunnel_mode")]
         account_label: Option<String>,
 
-        /// kubeconfig to write the tunnel's context into (defaults to ~/.kube/ssm-<cluster>.yaml)
+        /// kubeconfig to write a single tunnel's context into (defaults to
+        /// ~/.kube/ssm-<cluster>.yaml); with several tunnels, the file that gets every context
+        /// (defaults to ~/.kube/awsctl-tunnels.yaml)
         #[arg(short, long, requires = "tunnel_mode")]
         kubeconfig: Option<PathBuf>,
     },
@@ -325,6 +352,71 @@ mod tests {
     #[test]
     fn rejects_a_privileged_local_port() {
         assert!(Cli::try_parse_from(["awsctl", "eks", "--tunnel", "--local-port", "443"]).is_err());
+    }
+
+    #[test]
+    fn parses_several_clusters_with_their_profiles() {
+        let cli = Cli::try_parse_from([
+            "awsctl",
+            "eks",
+            "--tunnel",
+            "--cluster",
+            "dev:example-eks",
+            "-c",
+            "prod:example-k8s",
+        ])
+        .expect("parses");
+
+        let Commands::Eks { cluster, .. } = cli.command else {
+            panic!("parses as eks");
+        };
+        assert_eq!(cluster, ["dev:example-eks", "prod:example-k8s"]);
+    }
+
+    #[test]
+    fn parses_a_tunnel_group() {
+        let cli =
+            Cli::try_parse_from(["awsctl", "eks", "--tunnel", "--group", "work"]).expect("parses");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Eks {
+                tunnel: true,
+                group: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_a_group_without_tunnel() {
+        assert!(Cli::try_parse_from(["awsctl", "eks", "--update", "--group", "work"]).is_err());
+    }
+
+    #[test]
+    fn parses_tunnel_status_on_its_own() {
+        let cli = Cli::try_parse_from(["awsctl", "eks", "--tunnel-status"]).expect("parses");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Eks {
+                tunnel_status: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_tunnel_status_alongside_tunnel_or_cluster() {
+        assert!(Cli::try_parse_from(["awsctl", "eks", "--tunnel-status", "--tunnel"]).is_err());
+        assert!(Cli::try_parse_from([
+            "awsctl",
+            "eks",
+            "--tunnel-status",
+            "--cluster",
+            "example-eks"
+        ])
+        .is_err());
     }
 
     #[test]
