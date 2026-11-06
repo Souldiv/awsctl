@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/Souldiv/awsctl/compare/v1.2.4...v1.3.0) - 2026-11-06
+
+### Added
+
+- add eks --tunnel to reach private clusters over SSM ([#46](https://github.com/Souldiv/awsctl/pull/46))
+
 ## [1.2.4](https://github.com/Souldiv/awsctl/releases/tag/v1.2.4) - 2026-11-02
 
 ### Fixed
