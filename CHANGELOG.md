@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1](https://github.com/Souldiv/awsctl/compare/v1.4.0...v1.4.1) - 2026-11-07
+
+### Fixed
+
+- remove tunnel contexts from a shared kubeconfig on exit ([#50](https://github.com/Souldiv/awsctl/pull/50))
+
 ## [1.4.0](https://github.com/Souldiv/awsctl/compare/v1.3.0...v1.4.0) - 2026-11-06
 
 ### Added
