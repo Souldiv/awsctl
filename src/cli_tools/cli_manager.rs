@@ -214,7 +214,8 @@ impl CliManager {
                         .get_region()
                         .to_string()
                 });
-                eks_command::update_kubeconfig(&eks, &region, cluster).await?;
+                let profile = self.stable_profile_for_default_account();
+                eks_command::update_kubeconfig(&eks, &region, &profile, cluster).await?;
             }
             (.., true) => {
                 println!("Listing clusters...");

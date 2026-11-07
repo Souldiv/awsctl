@@ -202,7 +202,10 @@ CA. Its user runs `aws eks get-token` with the same profile and region.
 - `--kubeconfig <file>` writes the tunnel's cluster, user and context into
   another file, such as `~/.kube/config`. Other entries are kept, the file's
   current context is left alone unless it has none, and the file is rewritten
-  readable only by you.
+  readable only by you. `awsctl` prints which current context the file keeps,
+  because tools that take no `--context` use it. On exit, `awsctl` removes the
+  entries it wrote, if they are unchanged, so no context is left pointing at a
+  closed port; `~/.kube/ssm-<cluster>.yaml` is kept.
 
 #### Several clusters at once
 
@@ -216,7 +219,7 @@ awsctl eks --tunnel --cluster dev:<cluster> --cluster prod:<other-cluster>
 One `awsctl` keeps every tunnel open. Each still gets its own port and its own
 `~/.kube/ssm-<cluster>.yaml`, and every context is also merged into
 `~/.kube/awsctl-tunnels.yaml` (or the file `--kubeconfig` names), so one
-kubeconfig reaches them all:
+kubeconfig reaches them all. `awsctl` removes them from that file on exit:
 
 ```bash
 export KUBECONFIG=~/.kube/awsctl-tunnels.yaml
