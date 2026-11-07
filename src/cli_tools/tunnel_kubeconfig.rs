@@ -3,6 +3,7 @@ use kube::config::{
     AuthInfo, Cluster, Context as KubeContext, ExecConfig, ExecInteractiveMode, Kubeconfig,
     NamedAuthInfo, NamedCluster, NamedContext,
 };
+use serde::Serialize;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -86,6 +87,28 @@ pub fn with_tunnels(existing: Kubeconfig, targets: &[TunnelTarget]) -> Kubeconfi
     targets.iter().fold(existing, with_tunnel)
 }
 
+pub fn without_tunnel(existing: Kubeconfig, target: &TunnelTarget) -> Kubeconfig {
+    let name = context_name(target.cluster_name);
+    let written_here = contains(&existing.clusters, &tunnel_cluster(&name, target))
+        && contains(&existing.auth_infos, &tunnel_user(&name, target))
+        && contains(&existing.contexts, &tunnel_context(&name));
+    if !written_here {
+        return existing;
+    }
+
+    Kubeconfig {
+        clusters: remove_named(existing.clusters, &name, |entry| &entry.name),
+        auth_infos: remove_named(existing.auth_infos, &name, |entry| &entry.name),
+        contexts: remove_named(existing.contexts, &name, |entry| &entry.name),
+        current_context: existing.current_context.filter(|current| *current != name),
+        ..existing
+    }
+}
+
+pub fn without_tunnels(existing: Kubeconfig, targets: &[TunnelTarget]) -> Kubeconfig {
+    targets.iter().fold(existing, without_tunnel)
+}
+
 pub fn read_kubeconfig(path: &Path) -> Result<Kubeconfig> {
     match std::fs::read_to_string(path) {
         Ok(text) => Kubeconfig::from_yaml(&text)
@@ -129,6 +152,22 @@ fn replace_named<T: Clone>(
     } else {
         updated.into_iter().chain([replacement]).collect()
     }
+}
+
+fn remove_named<T>(entries: Vec<T>, name: &str, name_of: impl Fn(&T) -> &String) -> Vec<T> {
+    entries
+        .into_iter()
+        .filter(|entry| name_of(entry) != name)
+        .collect()
+}
+
+fn contains<T: Serialize>(entries: &[T], wanted: &T) -> bool {
+    let Ok(wanted) = serde_json::to_value(wanted) else {
+        return false;
+    };
+    entries
+        .iter()
+        .any(|entry| serde_json::to_value(entry).is_ok_and(|entry| entry == wanted))
 }
 
 fn tunnel_cluster(name: &str, target: &TunnelTarget) -> NamedCluster {
@@ -196,7 +235,7 @@ fn tunnel_context(name: &str) -> NamedContext {
 mod tests {
     use super::{
         context_name, read_kubeconfig, validate_cluster_name, with_tunnel, with_tunnels,
-        write_kubeconfig, TunnelTarget,
+        without_tunnel, without_tunnels, write_kubeconfig, TunnelTarget,
     };
     use crate::aws::eks::ClusterEndpoint;
     use kube::config::Kubeconfig;
@@ -294,10 +333,7 @@ mod tests {
         assert_eq!(context.user.as_deref(), Some("ssm-example-eks"));
     }
 
-    #[test]
-    fn merges_beside_other_contexts_without_switching_the_current_one() {
-        let existing = Kubeconfig::from_yaml(
-            "apiVersion: v1
+    const OTHER_KUBECONFIG: &str = "apiVersion: v1
 kind: Config
 current-context: other
 clusters:
@@ -313,12 +349,17 @@ contexts:
   context:
     cluster: other
     user: other
-",
-        )
-        .expect("parses");
+";
+
+    fn other_kubeconfig() -> Kubeconfig {
+        Kubeconfig::from_yaml(OTHER_KUBECONFIG).expect("parses")
+    }
+
+    #[test]
+    fn merges_beside_other_contexts_without_switching_the_current_one() {
         let endpoint = endpoint();
 
-        let merged = with_tunnel(existing, &target(&endpoint, "example-eks"));
+        let merged = with_tunnel(other_kubeconfig(), &target(&endpoint, "example-eks"));
 
         assert_eq!(merged.current_context.as_deref(), Some("other"));
         let names: Vec<&str> = merged.contexts.iter().map(|c| c.name.as_str()).collect();
@@ -374,6 +415,88 @@ contexts:
                 Some("https://127.0.0.1:22443")
             ]
         );
+    }
+
+    #[test]
+    fn removes_only_the_tunnel_entries_and_keeps_the_current_context() {
+        let endpoint = endpoint();
+        let merged = with_tunnel(other_kubeconfig(), &target(&endpoint, "example-eks"));
+
+        let cleaned = without_tunnel(merged, &target(&endpoint, "example-eks"));
+
+        assert_eq!(cleaned.current_context.as_deref(), Some("other"));
+        let contexts: Vec<&str> = cleaned.contexts.iter().map(|c| c.name.as_str()).collect();
+        let clusters: Vec<&str> = cleaned.clusters.iter().map(|c| c.name.as_str()).collect();
+        let users: Vec<&str> = cleaned.auth_infos.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(contexts, ["other"]);
+        assert_eq!(clusters, ["other"]);
+        assert_eq!(users, ["other"]);
+    }
+
+    #[test]
+    fn clears_the_current_context_when_it_names_the_removed_tunnel() {
+        let endpoint = endpoint();
+        let merged = with_tunnel(Kubeconfig::default(), &target(&endpoint, "example-eks"));
+
+        let cleaned = without_tunnel(merged, &target(&endpoint, "example-eks"));
+
+        assert_eq!(cleaned.current_context, None);
+        assert!(cleaned.contexts.is_empty());
+        assert!(cleaned.clusters.is_empty());
+        assert!(cleaned.auth_infos.is_empty());
+    }
+
+    #[test]
+    fn keeps_entries_that_another_run_rewrote() {
+        let endpoint = endpoint();
+        let rewritten = with_tunnel(
+            Kubeconfig::default(),
+            &TunnelTarget {
+                local_port: 22443,
+                ..target(&endpoint, "example-eks")
+            },
+        );
+
+        let cleaned = without_tunnel(rewritten, &target(&endpoint, "example-eks"));
+
+        assert_eq!(cleaned.contexts.len(), 1);
+        assert_eq!(cleaned.clusters.len(), 1);
+        assert_eq!(cleaned.auth_infos.len(), 1);
+        assert_eq!(cleaned.current_context.as_deref(), Some("ssm-example-eks"));
+    }
+
+    #[test]
+    fn keeps_a_same_named_context_that_awsctl_did_not_write() {
+        let foreign = Kubeconfig::from_yaml(&OTHER_KUBECONFIG.replace("other", "ssm-example-eks"))
+            .expect("parses");
+
+        let cleaned = without_tunnel(foreign, &target(&endpoint(), "example-eks"));
+
+        assert_eq!(cleaned.contexts.len(), 1);
+        assert_eq!(cleaned.current_context.as_deref(), Some("ssm-example-eks"));
+    }
+
+    #[test]
+    fn removes_every_tunnel_it_merged_from_a_file_read_back() {
+        let dir = temp_dir("cleanup");
+        let path = dir.join("awsctl-tunnels.yaml");
+        let endpoint = endpoint();
+        let second = TunnelTarget {
+            local_port: 22443,
+            aws_profile: "other-profile",
+            ..target(&endpoint, "example-k8s")
+        };
+        let targets = [target(&endpoint, "example-eks"), second];
+        write_kubeconfig(&path, &with_tunnels(other_kubeconfig(), &targets)).expect("writes");
+
+        let cleaned = without_tunnels(read_kubeconfig(&path).expect("reads"), &targets);
+
+        let names: Vec<&str> = cleaned.contexts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["other"]);
+        assert_eq!(cleaned.clusters.len(), 1);
+        assert_eq!(cleaned.auth_infos.len(), 1);
+        assert_eq!(cleaned.current_context.as_deref(), Some("other"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

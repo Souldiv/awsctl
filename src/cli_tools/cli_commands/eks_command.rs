@@ -21,6 +21,7 @@ pub async fn select_cluster(eks: &EksProvider, cluster: Option<String>) -> Resul
 pub async fn update_kubeconfig(
     eks: &EksProvider,
     region: &str,
+    profile: &str,
     cluster: Option<String>,
 ) -> Result<()> {
     let selected_cluster = select_cluster(eks, cluster).await?;
@@ -36,6 +37,8 @@ pub async fn update_kubeconfig(
             "update-kubeconfig",
             "--region",
             region,
+            "--profile",
+            profile,
             "--name",
             &selected_cluster,
         ])
