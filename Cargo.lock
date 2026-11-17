@@ -286,9 +286,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-eks"
-version = "1.159.0"
+version = "1.160.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82ebd5be4b7b6687b3e102fbc20c237a33093d7022008d3deba0da2ac7f81082"
+checksum = "c46fe03172be97734ffb1b8baf085f1d63e0d4dcd8b5f9954b81a4d9ca3ec1bb"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -605,9 +605,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-schema"
-version = "1.1.0"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bec8dae1015a6d959a5faf86fbdf77486cfe19e4ccb6ee009d8a46efc45028a4"
+checksum = "9543fc722ed4865ab29fb66bd7ed0bef7b029d265ba8c587144511e30006d431"
 dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
