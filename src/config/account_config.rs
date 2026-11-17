@@ -5,6 +5,7 @@ use crate::config::SsoDefaults;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct AccountConfig {
@@ -14,6 +15,8 @@ pub struct AccountConfig {
     regions: Vec<String>,
     #[serde(default)]
     profile_names: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tunnel_kubeconfig: Option<PathBuf>,
     #[serde(default)]
     tunnel_groups: BTreeMap<String, Vec<TunnelGroupEntry>>,
 }
@@ -26,6 +29,7 @@ impl Default for AccountConfig {
             roles: vec![String::from("AdministratorAccess")],
             regions: vec![String::from("us-east-1"), String::from("eu-west-2")],
             profile_names: BTreeMap::new(),
+            tunnel_kubeconfig: None,
             tunnel_groups: BTreeMap::new(),
         }
     }
@@ -50,6 +54,10 @@ impl AccountConfig {
 
     pub fn get_profile_names(&self) -> &BTreeMap<String, String> {
         &self.profile_names
+    }
+
+    pub fn get_tunnel_kubeconfig(&self) -> Option<&Path> {
+        self.tunnel_kubeconfig.as_deref()
     }
 
     pub fn get_tunnel_groups(&self) -> &BTreeMap<String, Vec<TunnelGroupEntry>> {
@@ -176,6 +184,29 @@ mod tests {
         assert!(config.is_defaults_set());
         assert!(config.get_profile_names().is_empty());
         assert!(config.get_tunnel_groups().is_empty());
+        assert!(config.get_tunnel_kubeconfig().is_none());
+    }
+
+    #[test]
+    fn reads_the_tunnel_kubeconfig_and_keeps_it_when_stored_again() {
+        let stored = r#"
+            roles = ["AdministratorAccess"]
+            regions = ["us-east-1"]
+            tunnel_kubeconfig = "~/.kube/tunnels.yaml"
+
+            [tunnel_groups]
+            work = ["dev:example-eks"]
+        "#;
+        let config: AccountConfig = toml::from_str(stored).expect("config parses");
+
+        let rewritten = toml::to_string(&config).expect("serialises");
+        let read_back: AccountConfig = toml::from_str(&rewritten).expect("parses again");
+
+        assert_eq!(
+            read_back.get_tunnel_kubeconfig(),
+            Some(std::path::Path::new("~/.kube/tunnels.yaml"))
+        );
+        assert_eq!(read_back.get_tunnel_groups().len(), 1);
     }
 
     #[test]

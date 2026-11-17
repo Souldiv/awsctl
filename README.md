@@ -171,7 +171,8 @@ Run `awsctl --help`, or `awsctl <command> --help`, for the full set of flags.
 `awsctl eks --tunnel` reaches a cluster whose API endpoint is private without a
 VPN. It forwards a local port through a bastion in the cluster's VPC to the
 endpoint on 443, using the `AWS-StartPortForwardingSessionToRemoteHost` Session
-Manager document, and writes a kubeconfig that points at that port:
+Manager document, and writes a context that points at that port into your
+kubeconfig:
 
 ```bash
 awsctl eks --tunnel --profile <profile> --cluster <cluster>
@@ -181,10 +182,21 @@ Leave it running; Ctrl-C closes the forward and ends the session. In another
 terminal:
 
 ```bash
-KUBECONFIG=~/.kube/ssm-<cluster>.yaml kubectl get nodes
+kubectl --context ssm-<cluster> get nodes
 ```
 
-Each cluster gets its own local port, derived from its name. The kubeconfig's
+The context, cluster and user are all named `ssm-<cluster>`. They go into the
+kubeconfig kubectl reads, the first file in `$KUBECONFIG` or else
+`~/.kube/config`, so tools such as Radar see the tunnel without extra setup.
+Other entries are kept, the file's current context is left alone unless it has
+none, and the file is rewritten readable only by you. `awsctl` prints which
+current context the file keeps, because tools that take no `--context` use it.
+On exit, `awsctl` removes the entries it wrote, if they are unchanged, so no
+context is left pointing at a closed port. Each change holds a lock beside the
+file, `.<file>.awsctl.lock`, so two `awsctl`s starting or stopping at once do
+not drop each other's entries.
+
+Each cluster gets its own local port, derived from its name. The cluster's
 `server` is `https://127.0.0.1:<port>`, and its `tls-server-name` is the real
 endpoint, so the certificate is still checked against the cluster's name and
 CA. Its user runs `aws eks get-token` with the same profile and region.
@@ -199,13 +211,10 @@ CA. Its user runs `aws eks get-token` with the same profile and region.
   cluster's VPC for a running instance tagged `Component=bastion`, then one
   named `*-jump-host` (preferring `<label>-jump-host` with `--account-label
   <label>`), then one named `bastion-host`. It asks when several match.
-- `--kubeconfig <file>` writes the tunnel's cluster, user and context into
-  another file, such as `~/.kube/config`. Other entries are kept, the file's
-  current context is left alone unless it has none, and the file is rewritten
-  readable only by you. `awsctl` prints which current context the file keeps,
-  because tools that take no `--context` use it. On exit, `awsctl` removes the
-  entries it wrote, if they are unchanged, so no context is left pointing at a
-  closed port; `~/.kube/ssm-<cluster>.yaml` is kept.
+- `--kubeconfig <file>` writes into another file instead. To change the
+  default, set `tunnel_kubeconfig = "<file>"` at the top of awsctl's config
+  (`awsctl config edit`); `--kubeconfig` still wins over it. With either,
+  `awsctl` prints the `KUBECONFIG=<file>` that kubectl needs to find it.
 
 #### Several clusters at once
 
@@ -216,13 +225,10 @@ one through its own account:
 awsctl eks --tunnel --cluster dev:<cluster> --cluster prod:<other-cluster>
 ```
 
-One `awsctl` keeps every tunnel open. Each still gets its own port and its own
-`~/.kube/ssm-<cluster>.yaml`, and every context is also merged into
-`~/.kube/awsctl-tunnels.yaml` (or the file `--kubeconfig` names), so one
-kubeconfig reaches them all. `awsctl` removes them from that file on exit:
+One `awsctl` keeps every tunnel open. Each gets its own port and its own
+context in the same kubeconfig, and `awsctl` removes them all on exit:
 
 ```bash
-export KUBECONFIG=~/.kube/awsctl-tunnels.yaml
 kubectl --context ssm-<cluster> get nodes
 kubectl --context ssm-<other-cluster> get nodes
 ```
@@ -231,7 +237,7 @@ kubectl --context ssm-<other-cluster> get nodes
 not set its own. `--local-port` and `--bastion` name one tunnel, so they work
 only with a single cluster. When two names derive the same port, the one that
 sorts later takes the next free port. A cluster name may appear only once,
-because its context and kubeconfig are named after it.
+because its context is named after it.
 
 To open the same set every day, list it under `[tunnel_groups]` in awsctl's
 config (`awsctl config edit`), and open it by name:

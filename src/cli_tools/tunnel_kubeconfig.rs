@@ -5,16 +5,17 @@ use kube::config::{
 };
 use serde::Serialize;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::aws::eks::ClusterEndpoint;
+use crate::utils::file_lock::lock_exclusive;
 use crate::utils::private_file::replace_private_file;
 
 const EXEC_API_VERSION: &str = "client.authentication.k8s.io/v1beta1";
 const MAX_CLUSTER_NAME_LENGTH: usize = 100;
 const CONTEXT_PREFIX: &str = "ssm-";
-const MERGED_KUBECONFIG_NAME: &str = "awsctl-tunnels.yaml";
 
 pub struct TunnelTarget<'a> {
     pub cluster_name: &'a str,
@@ -46,21 +47,37 @@ pub fn context_name(cluster_name: &str) -> String {
     format!("{}{}", CONTEXT_PREFIX, cluster_name)
 }
 
-pub fn default_kubeconfig_path(cluster_name: &str) -> Result<PathBuf> {
-    Ok(kube_dir()?.join(format!("{}.yaml", context_name(cluster_name))))
+pub fn kubectl_kubeconfig_path(kubeconfig_env: Option<&OsStr>, home: &Path) -> PathBuf {
+    kubeconfig_env
+        .and_then(|paths| std::env::split_paths(paths).find(|path| !path.as_os_str().is_empty()))
+        .unwrap_or_else(|| home.join(".kube").join("config"))
 }
 
-pub fn default_merged_kubeconfig_path() -> Result<PathBuf> {
-    Ok(kube_dir()?.join(MERGED_KUBECONFIG_NAME))
+pub fn tunnel_kubeconfig_path(
+    flag: Option<&Path>,
+    configured: Option<&Path>,
+    kubectl_default: &Path,
+    home: &Path,
+) -> PathBuf {
+    match (flag, configured) {
+        (Some(path), _) => path.to_path_buf(),
+        (None, Some(path)) => expand_home(path, home),
+        (None, None) => kubectl_default.to_path_buf(),
+    }
 }
 
-fn kube_dir() -> Result<PathBuf> {
-    let home = directories::UserDirs::new()
+pub fn home_dir() -> Result<PathBuf> {
+    Ok(directories::UserDirs::new()
         .context("Unable to get home directory")?
         .home_dir()
-        .to_path_buf();
+        .to_path_buf())
+}
 
-    Ok(home.join(".kube"))
+fn expand_home(path: &Path, home: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(rest) => home.join(rest),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 pub fn with_tunnel(existing: Kubeconfig, target: &TunnelTarget) -> Kubeconfig {
@@ -122,9 +139,17 @@ pub fn read_kubeconfig(path: &Path) -> Result<Kubeconfig> {
 pub fn write_kubeconfig(path: &Path, kubeconfig: &Kubeconfig) -> Result<()> {
     let contents = serde_saphyr::to_string(kubeconfig)
         .with_context(|| "Unable to serialise the kubeconfig.")?;
-    let symlink_target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
-    replace_private_file(&symlink_target, &contents)
+    replace_private_file(&symlink_target(path), &contents)
+}
+
+pub fn locked<T>(path: &Path, change: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _lock = lock_exclusive(&symlink_target(path))?;
+    change()
+}
+
+fn symlink_target(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn replace_named<T: Clone>(
@@ -234,13 +259,15 @@ fn tunnel_context(name: &str) -> NamedContext {
 #[cfg(test)]
 mod tests {
     use super::{
-        context_name, read_kubeconfig, validate_cluster_name, with_tunnel, with_tunnels,
-        without_tunnel, without_tunnels, write_kubeconfig, TunnelTarget,
+        context_name, kubectl_kubeconfig_path, locked, read_kubeconfig, tunnel_kubeconfig_path,
+        validate_cluster_name, with_tunnel, with_tunnels, without_tunnel, without_tunnels,
+        write_kubeconfig, TunnelTarget,
     };
     use crate::aws::eks::ClusterEndpoint;
     use kube::config::Kubeconfig;
+    use std::ffi::OsStr;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     const ENDPOINT_HOST: &str = "EXAMPLE0123456789.gr7.eu-west-2.eks.amazonaws.com";
 
@@ -554,9 +581,121 @@ contexts:
         }
     }
 
+    const HOME: &str = "/home/me";
+
     #[test]
-    fn keeps_the_merged_kubeconfig_apart_from_every_cluster_file() {
-        assert!(!super::MERGED_KUBECONFIG_NAME.starts_with(super::CONTEXT_PREFIX));
+    fn defaults_to_the_kubeconfig_kubectl_reads_when_kubeconfig_is_unset() {
+        assert_eq!(
+            kubectl_kubeconfig_path(None, Path::new(HOME)),
+            Path::new("/home/me/.kube/config")
+        );
+        assert_eq!(
+            kubectl_kubeconfig_path(Some(OsStr::new("")), Path::new(HOME)),
+            Path::new("/home/me/.kube/config")
+        );
+    }
+
+    #[test]
+    fn defaults_to_the_first_file_kubeconfig_names() {
+        assert_eq!(
+            kubectl_kubeconfig_path(Some(OsStr::new("/work/one.yaml")), Path::new(HOME)),
+            Path::new("/work/one.yaml")
+        );
+        assert_eq!(
+            kubectl_kubeconfig_path(
+                Some(OsStr::new("::/work/one.yaml:/work/two.yaml")),
+                Path::new(HOME)
+            ),
+            Path::new("/work/one.yaml")
+        );
+    }
+
+    #[test]
+    fn prefers_the_flag_then_the_config_then_kubectls_default() {
+        let flag = Path::new("/flag.yaml");
+        let configured = Path::new("/configured.yaml");
+        let default = Path::new("/home/me/.kube/config");
+        let home = Path::new(HOME);
+
+        assert_eq!(
+            tunnel_kubeconfig_path(Some(flag), Some(configured), default, home),
+            flag
+        );
+        assert_eq!(
+            tunnel_kubeconfig_path(None, Some(configured), default, home),
+            configured
+        );
+        assert_eq!(tunnel_kubeconfig_path(None, None, default, home), default);
+    }
+
+    #[test]
+    fn expands_a_home_relative_path_from_the_config() {
+        assert_eq!(
+            tunnel_kubeconfig_path(
+                None,
+                Some(Path::new("~/.kube/tunnels.yaml")),
+                Path::new("/home/me/.kube/config"),
+                Path::new(HOME)
+            ),
+            Path::new("/home/me/.kube/tunnels.yaml")
+        );
+    }
+
+    #[test]
+    fn merges_into_an_existing_kubeconfig_file_and_cleans_up_after() {
+        let dir = temp_dir("existing");
+        let path = dir.join("config");
+        std::fs::create_dir_all(&dir).expect("creates");
+        std::fs::write(&path, OTHER_KUBECONFIG).expect("writes");
+        let endpoint = endpoint();
+        let tunnel = target(&endpoint, "example-eks");
+
+        write_kubeconfig(
+            &path,
+            &with_tunnel(read_kubeconfig(&path).expect("reads"), &tunnel),
+        )
+        .expect("writes");
+        let merged = read_kubeconfig(&path).expect("reads");
+        write_kubeconfig(&path, &without_tunnel(merged.clone(), &tunnel)).expect("writes");
+        let cleaned = read_kubeconfig(&path).expect("reads");
+
+        let merged_names: Vec<&str> = merged.contexts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(merged_names, ["other", "ssm-example-eks"]);
+        assert_eq!(merged.current_context.as_deref(), Some("other"));
+        let cleaned_names: Vec<&str> = cleaned.contexts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(cleaned_names, ["other"]);
+        assert_eq!(cleaned.current_context.as_deref(), Some("other"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeps_every_entry_when_several_writers_merge_at_once() {
+        let dir = temp_dir("concurrent");
+        let path = dir.join("config");
+        let clusters: Vec<String> = (0..8).map(|index| format!("cluster-{index}")).collect();
+
+        std::thread::scope(|scope| {
+            for cluster in &clusters {
+                let path = &path;
+                scope.spawn(move || {
+                    let endpoint = endpoint();
+                    let tunnel = target(&endpoint, cluster);
+                    locked(path, || {
+                        let existing = read_kubeconfig(path)?;
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        write_kubeconfig(path, &with_tunnel(existing, &tunnel))
+                    })
+                    .expect("merges");
+                });
+            }
+        });
+
+        let merged = read_kubeconfig(&path).expect("reads");
+        let mut names: Vec<String> = merged.contexts.into_iter().map(|c| c.name).collect();
+        names.sort();
+        let expected: Vec<String> = clusters.iter().map(|name| context_name(name)).collect();
+        assert_eq!(names, expected);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

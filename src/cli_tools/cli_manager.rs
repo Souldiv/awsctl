@@ -247,6 +247,7 @@ impl CliManager {
             region,
             options,
             self.cfg.get_tunnel_groups(),
+            self.cfg.get_tunnel_kubeconfig(),
             stored_role,
         )
         .await

@@ -166,8 +166,8 @@ pub enum Commands {
         #[arg(short, long, group = "eks")]
         list: bool,
 
-        /// forward a local port to each cluster's API through its bastion over SSM, and write a
-        /// kubeconfig for it; reconnects dropped tunnels and runs until Ctrl-C
+        /// forward a local port to each cluster's API through its bastion over SSM, and write its
+        /// context into your kubeconfig; reconnects dropped tunnels and runs until Ctrl-C
         #[arg(
             short,
             long,
@@ -220,9 +220,9 @@ pub enum Commands {
         #[arg(long, requires = "tunnel_mode")]
         account_label: Option<String>,
 
-        /// kubeconfig to write a single tunnel's context into (defaults to
-        /// ~/.kube/ssm-<cluster>.yaml); with several tunnels, the file that gets every context
-        /// (defaults to ~/.kube/awsctl-tunnels.yaml)
+        /// kubeconfig to write every tunnel's context into (defaults to tunnel_kubeconfig in
+        /// awsctl's config, else the one kubectl reads: the first file in $KUBECONFIG, or
+        /// ~/.kube/config)
         #[arg(short, long, requires = "tunnel_mode")]
         kubeconfig: Option<PathBuf>,
     },

@@ -71,7 +71,6 @@ pub struct PreparedTunnel {
     pub endpoint: ClusterEndpoint,
     pub bastion_id: String,
     pub local_port: u16,
-    pub kubeconfig: PathBuf,
     pub probe: ApiProbe,
 }
 
