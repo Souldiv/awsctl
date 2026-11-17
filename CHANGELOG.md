@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0](https://github.com/Souldiv/awsctl/compare/v1.4.0...v1.5.0) - 2026-11-17
+
+### Added
+
+- write eks --tunnel contexts into the kubeconfig kubectl reads ([#52](https://github.com/Souldiv/awsctl/pull/52))
+
+### Fixed
+
+- remove tunnel contexts from a shared kubeconfig on exit ([#50](https://github.com/Souldiv/awsctl/pull/50))
+
 ## [1.4.0](https://github.com/Souldiv/awsctl/compare/v1.3.0...v1.4.0) - 2026-11-06
 
 ### Added
