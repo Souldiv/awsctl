@@ -15,8 +15,8 @@ use crate::cli_tools::sdk_config::profile_sdk_config;
 use crate::cli_tools::tunnel_credentials::{classify, FailureKind};
 use crate::cli_tools::tunnel_keepalive::ApiProbe;
 use crate::cli_tools::tunnel_kubeconfig::{
-    context_name, default_kubeconfig_path, default_merged_kubeconfig_path, read_kubeconfig,
-    with_tunnel, with_tunnels, without_tunnels, write_kubeconfig, TunnelTarget,
+    context_name, home_dir, kubectl_kubeconfig_path, locked, read_kubeconfig,
+    tunnel_kubeconfig_path, with_tunnels, without_tunnels, write_kubeconfig, TunnelTarget,
 };
 use crate::cli_tools::tunnel_port::{assign_ports, ensure_port_free};
 use crate::cli_tools::tunnel_status::{
@@ -82,9 +82,20 @@ pub async fn open_tunnels(
     region: Option<String>,
     options: TunnelOptions,
     groups: &BTreeMap<String, Vec<TunnelGroupEntry>>,
+    configured_kubeconfig: Option<&Path>,
     stored_role: StoredRoleAccount,
 ) -> Result<()> {
     ensure_session_manager_plugin()?;
+
+    let home = home_dir()?;
+    let kubectl_default = kubectl_kubeconfig_path(std::env::var_os("KUBECONFIG").as_deref(), &home);
+    let kubeconfig = tunnel_kubeconfig_path(
+        options.kubeconfig.as_deref(),
+        configured_kubeconfig,
+        &kubectl_default,
+        &home,
+    );
+    let kubectl_reads_it = kubeconfig == kubectl_default;
 
     let defaults = TargetDefaults {
         profile: options.profile.clone(),
@@ -108,45 +119,30 @@ pub async fn open_tunnels(
     let ports = assign_ports(&requests)?;
     ports.iter().try_for_each(|port| ensure_port_free(*port))?;
 
-    let single = targets.len() == 1;
     let mut prepared = Vec::with_capacity(targets.len());
     for (target, port) in targets.iter().zip(ports) {
-        let kubeconfig = match (&options.kubeconfig, single) {
-            (Some(path), true) => path.clone(),
-            _ => default_kubeconfig_path(&target.cluster)?,
-        };
-        let tunnel = prepare_tunnel(target, port, kubeconfig, &stored_role)
+        let tunnel = prepare_tunnel(target, port, &stored_role)
             .await
             .map_err(|error| explain_failure(error, target))?;
         prepared.push(tunnel);
     }
 
     let written: Vec<WrittenTunnel> = prepared.iter().map(WrittenTunnel::of).collect();
-    let merged = if single {
-        None
-    } else {
-        let path = match &options.kubeconfig {
-            Some(path) => path.clone(),
-            None => default_merged_kubeconfig_path()?,
-        };
-        write_merged_kubeconfig(&path, &written)?;
-        Some(path)
-    };
-    let shared = merged.clone().or_else(|| options.kubeconfig.clone());
+    write_tunnels(&kubeconfig, &written)?;
 
     let outcome = async {
-        let current_context = match summary_kubeconfig(&prepared, merged.as_deref()) {
-            Some(path) => read_kubeconfig(&path)?.current_context,
-            None => None,
-        };
-        print_summary(&prepared, merged.as_deref(), current_context.as_deref());
+        let current_context = read_kubeconfig(&kubeconfig)?.current_context;
+        print_summary(
+            &prepared,
+            &kubeconfig,
+            kubectl_reads_it,
+            current_context.as_deref(),
+        );
         supervise(prepared).await
     }
     .await;
 
-    if let Some(path) = &shared {
-        remove_written_tunnels(path, &written);
-    }
+    remove_written_tunnels(&kubeconfig, &written);
     outcome
 }
 
@@ -269,7 +265,6 @@ async fn resolve_account(
 async fn prepare_tunnel(
     target: &TargetSpec,
     local_port: u16,
-    kubeconfig: PathBuf,
     stored_role: &StoredRoleAccount,
 ) -> Result<PreparedTunnel> {
     let resolved = resolve_account(
@@ -296,16 +291,7 @@ async fn prepare_tunnel(
     };
     ssm.ensure_instance_online(&bastion_id).await?;
 
-    let tunnel_target = TunnelTarget {
-        cluster_name: &target.cluster,
-        region: &resolved.region,
-        aws_profile: &resolved.aws_profile,
-        endpoint: &endpoint,
-        local_port,
-    };
     let probe = ApiProbe::new(&endpoint, local_port)?;
-    let updated = with_tunnel(read_kubeconfig(&kubeconfig)?, &tunnel_target);
-    write_kubeconfig(&kubeconfig, &updated)?;
 
     Ok(PreparedTunnel {
         account: resolved.account,
@@ -315,20 +301,22 @@ async fn prepare_tunnel(
         endpoint,
         bastion_id,
         local_port,
-        kubeconfig,
         probe,
     })
 }
 
-fn write_merged_kubeconfig(path: &Path, tunnels: &[WrittenTunnel]) -> Result<()> {
+fn write_tunnels(path: &Path, tunnels: &[WrittenTunnel]) -> Result<()> {
     let targets: Vec<TunnelTarget> = tunnels.iter().map(WrittenTunnel::target).collect();
 
-    write_kubeconfig(path, &with_tunnels(read_kubeconfig(path)?, &targets))
+    locked(path, || {
+        write_kubeconfig(path, &with_tunnels(read_kubeconfig(path)?, &targets))
+    })
 }
 
 fn remove_written_tunnels(path: &Path, tunnels: &[WrittenTunnel]) {
     let targets: Vec<TunnelTarget> = tunnels.iter().map(WrittenTunnel::target).collect();
-    let removal = read_kubeconfig(path).and_then(|existing| {
+    let removal = locked(path, || {
+        let existing = read_kubeconfig(path)?;
         let cleaned = without_tunnels(existing.clone(), &targets);
         let removed: Vec<String> = existing
             .contexts
@@ -353,15 +341,12 @@ fn remove_written_tunnels(path: &Path, tunnels: &[WrittenTunnel]) {
     }
 }
 
-fn summary_kubeconfig(tunnels: &[PreparedTunnel], merged: Option<&Path>) -> Option<PathBuf> {
-    match (merged, tunnels) {
-        (Some(path), [_, ..]) => Some(path.to_path_buf()),
-        (None, [only]) => Some(only.kubeconfig.clone()),
-        _ => None,
-    }
-}
-
-fn print_summary(tunnels: &[PreparedTunnel], merged: Option<&Path>, current_context: Option<&str>) {
+fn print_summary(
+    tunnels: &[PreparedTunnel],
+    kubeconfig: &Path,
+    kubectl_reads_it: bool,
+    current_context: Option<&str>,
+) {
     for tunnel in tunnels {
         println!("{}", tunnel.cluster_name);
         println!("  bastion     {}", tunnel.bastion_id);
@@ -369,24 +354,20 @@ fn print_summary(tunnels: &[PreparedTunnel], merged: Option<&Path>, current_cont
             "  forwarding  127.0.0.1:{} -> {}:{}",
             tunnel.local_port, tunnel.endpoint.endpoint_host, EKS_API_PORT
         );
-        println!(
-            "  kubeconfig  {} (context {})",
-            tunnel.kubeconfig.display(),
-            context_name(&tunnel.cluster_name)
-        );
+        println!("  context     {}", context_name(&tunnel.cluster_name));
     }
 
-    if let Some(path) = merged {
-        println!("Every context is also in {}.", path.display());
-    }
-    let (Some(kubeconfig), [first, ..]) = (summary_kubeconfig(tunnels, merged), tunnels) else {
+    let Some(first) = tunnels.first() else {
         return;
     };
-    let context = context_name(&first.cluster_name);
+    println!("Wrote the contexts into {}.", kubeconfig.display());
     println!(
-        "In another terminal: KUBECONFIG={} kubectl --context {} get nodes",
-        kubeconfig.display(),
-        context
+        "In another terminal: {}",
+        kubectl_hint(
+            kubeconfig,
+            kubectl_reads_it,
+            &context_name(&first.cluster_name)
+        )
     );
     let contexts: Vec<String> = tunnels
         .iter()
@@ -394,12 +375,24 @@ fn print_summary(tunnels: &[PreparedTunnel], merged: Option<&Path>, current_cont
         .collect();
     println!(
         "{}",
-        current_context_note(&kubeconfig, current_context, &contexts)
+        current_context_note(kubeconfig, current_context, &contexts)
     );
     println!(
         "Tunnels reconnect on their own. Press Ctrl-C to close them; \
          'awsctl eks --tunnel-status' shows them from another terminal."
     );
+}
+
+fn kubectl_hint(kubeconfig: &Path, kubectl_reads_it: bool, context: &str) -> String {
+    if kubectl_reads_it {
+        format!("kubectl --context {} get nodes", context)
+    } else {
+        format!(
+            "KUBECONFIG={} kubectl --context {} get nodes",
+            kubeconfig.display(),
+            context
+        )
+    }
 }
 
 fn current_context_note(
@@ -470,7 +463,7 @@ async fn find_bastion(
 
 #[cfg(test)]
 mod tests {
-    use super::{current_context_note, explain_failure, tunnel_group};
+    use super::{current_context_note, explain_failure, kubectl_hint, tunnel_group};
     use crate::cli_tools::tunnel_target::parse_target;
     use crate::config::tunnel_group::TunnelGroupEntry;
     use anyhow::anyhow;
@@ -542,6 +535,26 @@ mod tests {
             "The current-context of /home/me/.kube/config stays \
              arn:aws:eks:eu-west-2:000000000000:cluster/example-eks; tools that take no \
              --context, such as Radar, use it, not a tunnel."
+        );
+    }
+
+    #[test]
+    fn needs_no_kubeconfig_prefix_for_the_file_kubectl_reads() {
+        assert_eq!(
+            kubectl_hint(Path::new("/home/me/.kube/config"), true, "ssm-example-eks"),
+            "kubectl --context ssm-example-eks get nodes"
+        );
+    }
+
+    #[test]
+    fn names_any_other_kubeconfig_in_the_hint() {
+        assert_eq!(
+            kubectl_hint(
+                Path::new("/home/me/.kube/tunnels.yaml"),
+                false,
+                "ssm-example-eks"
+            ),
+            "KUBECONFIG=/home/me/.kube/tunnels.yaml kubectl --context ssm-example-eks get nodes"
         );
     }
 

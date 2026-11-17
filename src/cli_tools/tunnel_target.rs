@@ -107,7 +107,7 @@ fn reject_duplicate_clusters(targets: &[TargetSpec]) -> Result<()> {
         .find(|target| !seen.insert(target.cluster.as_str()))
     {
         Some(duplicate) => Err(anyhow!(
-            "Cluster '{}' is named twice. Its context and kubeconfig are named after the cluster, \
+            "Cluster '{}' is named twice. Its context is named after the cluster, \
              so open a tunnel to the second one from a separate awsctl with --kubeconfig.",
             duplicate.cluster
         )),

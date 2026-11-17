@@ -9,6 +9,11 @@ roles = ["AdministratorAccess"]
 # The regions awsctl offers when you pick a region.
 regions = ["us-east-1", "eu-west-2"]
 
+# The kubeconfig `awsctl eks --tunnel` writes its contexts into. Without it,
+# awsctl uses the one kubectl reads: the first file in $KUBECONFIG, or
+# ~/.kube/config. `--kubeconfig <file>` overrides both.
+# tunnel_kubeconfig = "~/.kube/tunnels.yaml"
+
 [defaults]
 # Your AWS access portal URL, from the IAM Identity Center console.
 sso_start_url = "https://your-sso-portal.awsapps.com/start"
